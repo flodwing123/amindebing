@@ -42,7 +42,7 @@ create policy "user_sync_insert_own" on public.user_sync
 
 drop policy if exists "user_sync_update_own" on public.user_sync;
 create policy "user_sync_update_own" on public.user_sync
-  for update using (auth.uid() = user_id);
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 drop policy if exists "user_sync_delete_own" on public.user_sync;
 create policy "user_sync_delete_own" on public.user_sync
