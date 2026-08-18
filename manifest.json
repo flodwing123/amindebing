@@ -1,0 +1,28 @@
+{
+  "name": "啊敏的兵 · 班主任工作台",
+  "short_name": "啊敏的兵",
+  "description": "初中道德与法治老师兼班主任专属工作台：班级管理、作业提效、每周班会AI备课、家校沟通、荣誉手账",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "fullscreen"],
+  "orientation": "portrait",
+  "background_color": "#FAF8F2",
+  "theme_color": "#1B4332",
+  "lang": "zh-CN",
+  "categories": ["education", "productivity"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
