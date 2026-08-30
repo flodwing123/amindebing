@@ -406,11 +406,12 @@ registerModule("class", {
   render() {
     return `
     <div class="mv-header"><h2 class="mv-title">🏫 班级管理</h2>
-      <p class="mv-sub">${esc(classInfo().name)} · 学生 ${classInfo().studentCount} 人 · 13 项管理工具</p></div>
+      <p class="mv-sub">${esc(classInfo().name)} · 学生 ${classInfo().studentCount} 人 · 14 项管理工具</p></div>
     ${modToolbar("班级管理")}
     <div class="big-tab-grid g3" id="classTabs">
       <div class="big-tab theme-teal active" data-tab="timetable"><span class="bt-ico">⏰</span><div><div class="bt-name">班级课程表</div><div class="bt-desc">一周课程 · 点击编辑</div></div></div>
       <div class="big-tab theme-blue" data-tab="attendance"><span class="bt-ico">📋</span><div><div class="bt-name">考勤记录</div><div class="bt-desc">迟到/缺勤/请假标记</div></div></div>
+      <div class="big-tab theme-coral" data-tab="special-health"><span class="bt-ico">🚨</span><div><div class="bt-name">特异体质提醒</div><div class="bt-desc">病史 · 注意事项 · 诊断证明</div></div></div>
       <div class="big-tab theme-coral" data-tab="decibel"><span class="bt-ico">📢</span><div><div class="bt-name">早读分贝</div><div class="bt-desc">麦克风实时监测朗读</div></div></div>
       <div class="big-tab theme-gold" data-tab="bottle"><span class="bt-ico">🍯</span><div><div class="bt-name">班级心愿瓶</div><div class="bt-desc">星星解锁心愿</div></div></div>
       <div class="big-tab theme-rose" data-tab="coupon"><span class="bt-ico">🎟️</span><div><div class="bt-name">奖券打印</div><div class="bt-desc">自定义奖券卡片</div></div></div>
@@ -433,7 +434,15 @@ registerModule("class", {
 });
 
 function classInfo() {
-  return Store.get("classInfo", { name: "701班", studentCount: 48 });
+  // 班主任班 = classes 里第一个（isHome 班），班级人数直接取该班花名册真实人数
+  const home = (Store.get("classes", defaultClasses())[0] || { name: "1班" });
+  const all = Store.get("students", {});
+  const homeList = all[home.name] || [];
+  const saved = Store.get("classInfo", {});
+  return {
+    name: saved.name || home.name,
+    studentCount: saved.studentCount || homeList.length || 0
+  };
 }
 
 function bindClassTabs() {
@@ -446,6 +455,7 @@ function bindClassTabs() {
       const map = {
         timetable: renderClassTimetable,
         attendance: renderAttendance,
+        "special-health": renderSpecialHealth,
         decibel: renderDecibel,
         bottle: renderBottle,
         coupon: renderCoupon,
@@ -655,6 +665,67 @@ function renderAttendance() {
   return html;
 }
 
+/* ---- 特异体质提醒 ---- */
+function getSpecialHealth() {
+  const list = Store.get("specialHealth", []);
+  return Array.isArray(list) ? list : [];
+}
+function saveSpecialHealth(list) {
+  Store.set("specialHealth", Array.isArray(list) ? list : []);
+}
+/* 渲染某学生的图片组（家长说明 / 诊断证明），返回缩略图网格 */
+function renderShImgs(imgs, label) {
+  const arr = Array.isArray(imgs) ? imgs : [];
+  if (!arr.length) {
+    return `<div style="margin:5px 0;font-size:12px;color:var(--ink-light)">📎 ${label}：暂无</div>`;
+  }
+  return `<div style="margin:6px 0">
+    <div style="font-size:12px;color:var(--ink-light);margin-bottom:4px">📎 ${label}（${arr.length} 张）：</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      ${arr.map(src => `<img src="${src}" data-act="sh-img" alt="${label}" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in;background:#f0f0f0">`).join("")}
+    </div>
+  </div>`;
+}
+/* 渲染某学生的请假记录（同步请假登记 leaveRecords） */
+function renderShLeave(name) {
+  const list = (Store.get("leaveRecords", []) || []).filter(r => r && r.name === name);
+  if (!list.length) return "";
+  const rows = list.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+    .slice(0, 5)
+    .map(r => `<div style="font-size:12.5px;color:var(--ink-light)">📮 ${esc(r.start || "")} ~ ${esc(r.end || "")} · ${esc(r.type || "")} · ${esc(r.status || "")}</div>`)
+    .join("");
+  return `<div style="margin:6px 0;padding:8px 10px;background:#FBF7F0;border-radius:8px;font-size:12px"><b>📮 请假记录（同步考勤数据）：</b>${rows}</div>`;
+}
+function renderSpecialHealth() {
+  const list = getSpecialHealth();
+  let cards = "";
+  list.forEach(r => {
+    cards += `
+    <div class="card sh-card" style="border:1px solid #F3D3CF;margin-bottom:12px;box-shadow:0 1px 4px rgba(192,57,43,.06)">
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
+        <b style="font-size:16px;color:#C0392B">🚨 ${esc(r.name || "")}</b>
+        <span class="badge" style="background:#C0392B;color:#fff">${esc(r.cls || "")}</span>
+        <span class="badge" style="background:#FBE9E7;color:#C0392B">${esc(r.illness || "")}</span>
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" data-act="sh-edit" data-id="${esc(r.id)}">编辑</button>
+          <button class="btn btn-danger btn-sm" data-act="sh-del" data-id="${esc(r.id)}">删除</button>
+        </span>
+      </div>
+      ${r.note ? `<div style="margin:8px 0 2px;font-size:13.5px;line-height:1.7"><b>⚠️ 注意事项：</b>${esc(r.note)}</div>` : ""}
+      ${renderShImgs(r.parentImgs, "家长手写情况说明")}
+      ${renderShImgs(r.hospitalImgs, "医院诊断证明")}
+      ${renderShLeave(r.name)}
+    </div>`;
+  });
+  return `<div class="card">
+    <div class="card-title">🚨 特异体质提醒 <span class="sub">病史 · 注意事项 · 家长说明 · 诊断证明 · 长期保存</span>
+      <button class="btn btn-primary btn-sm" data-act="sh-add">＋ 新增记录</button>
+    </div>
+    <div style="font-size:12.5px;color:#C0564D;margin-bottom:12px;line-height:1.7">⚠️ 以下学生有特殊体质，请在教学、体育、活动、饮食等场景特别留意。图片与记录<b>长期保存在本机</b>，不会丢失。</div>
+    ${cards || `<div class="empty"><span class="e-ico">🍃</span>暂无记录 · 点击「＋ 新增记录」添加</div>`}
+  </div>`;
+}
+
 /* ---- 早读分贝 ---- */
 function renderDecibel() {
   const hist = Store.get("dbHistory", []);
@@ -739,11 +810,11 @@ function renderSeatsEdit() {
   const cols = Store.get("seatCols", 6);
   if (seats.length === 0 && students.length === 0) {
     return `<div class="card"><div class="card-title">🪑 座次表
-      <button class="btn btn-primary btn-sm" data-act="seat-import">📥 导入成绩生成</button>
+      <button class="btn btn-primary btn-sm" data-act="seat-import">📊 导入 Excel 排座</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-reset">清空</button></div>
       <div class="empty"><span class="e-ico">🪑</span>
-      还没有座次数据。可以先在「学生信息」导入花名册和成绩，然后点击「导入成绩生成」自动按好中差四人一组排座。<br>
-      也可以在下方直接添加学生，然后拖动调整位置。</div>
+      还没有座次数据。点击「导入 Excel 排座」，上传含<b>姓名、性别、成绩、学习小组</b>的表格，即可按<b>成绩 / 学习小组 / 男女搭配</b>自动排座。<br>
+      排好后可拖动学生卡片微调，男生蓝色、女生粉色区分。</div>
     </div>`;
   }
   // 用保存的布局或默认顺序
@@ -751,7 +822,7 @@ function renderSeatsEdit() {
   const rows = Math.ceil(order.length / cols);
   let html = `<div class="card">
     <div class="card-title">🪑 座次表
-      <button class="btn btn-primary btn-sm" data-act="seat-import">📥 导入成绩生成</button>
+      <button class="btn btn-primary btn-sm" data-act="seat-import">📊 导入 Excel 排座</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-save">💾 保存布局</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-download">⬇️ 下载</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-print">🖨️ 打印</button>

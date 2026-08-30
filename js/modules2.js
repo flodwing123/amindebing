@@ -22,6 +22,126 @@ function saveStudents(list, className) {
 }
 
 /* =========================================================
+   特异体质提醒 · 表单 / 多图上传 / 预览
+   （数据 key：specialHealth，图片压缩复用 monthly.js 的 compressImage）
+   ========================================================= */
+let shDraft = null; // 当前弹窗草稿：{ parentImgs:[], hospitalImgs:[] }
+const SH_MAX_IMG = 9; // 每类图片最多张数
+
+/* 打开新增/编辑弹窗 */
+function shOpenForm(record) {
+  const isEdit = !!record;
+  const r = record || { name: "", cls: "", illness: "", note: "", parentImgs: [], hospitalImgs: [] };
+  shDraft = { parentImgs: (r.parentImgs || []).slice(), hospitalImgs: (r.hospitalImgs || []).slice() };
+  const classes = Store.get("classes", defaultClasses());
+  const clsOpts = classes.map(c => `<option value="${esc(c.name)}" ${c.name === r.cls ? "selected" : ""}>${esc(c.name)}</option>`).join("");
+  const illnessPreset = ["哮喘", "心脏病", "癫痫", "过敏体质", "糖尿病", "血友病", "其他"];
+  const illnessOpts = (illnessPreset.indexOf(r.illness) < 0 && r.illness ? illnessPreset.concat([r.illness]) : illnessPreset)
+    .map(t => `<option value="${esc(t)}" ${t === r.illness ? "selected" : ""}>${esc(t)}</option>`).join("");
+
+  openModal(`
+    <div style="display:flex;flex-direction:column;gap:8px;text-align:left">
+      <div style="display:flex;gap:8px">
+        <input class="inp" id="shName" placeholder="学生姓名" value="${esc(r.name)}" style="flex:1">
+        <select class="inp" id="shCls" style="width:104px">${clsOpts}</select>
+      </div>
+      <select class="inp" id="shIllness">${illnessOpts}</select>
+      <textarea class="inp" id="shNote" placeholder="注意事项，如：不能剧烈运动 · 需随身携带药物 · 饮食忌口…" rows="3" style="resize:vertical">${esc(r.note)}</textarea>
+      <div style="font-size:12.5px;font-weight:600;color:var(--ink-soft)">📎 家长手写情况说明（可多张）</div>
+      <button class="btn btn-ghost btn-sm" data-act="sh-pick" data-kind="parentImgs">＋ 上传图片</button>
+      <div id="sh-draft-parentImgs" style="display:flex;flex-wrap:wrap;gap:2px"></div>
+      <div style="font-size:12.5px;font-weight:600;color:var(--ink-soft)">📎 医院诊断证明（可多张）</div>
+      <button class="btn btn-ghost btn-sm" data-act="sh-pick" data-kind="hospitalImgs">＋ 上传图片</button>
+      <div id="sh-draft-hospitalImgs" style="display:flex;flex-wrap:wrap;gap:2px"></div>
+      <div style="font-size:11.5px;color:var(--ink-light)">💡 图片会自动压缩保存到本机，每类最多 ${SH_MAX_IMG} 张</div>
+    </div>`, isEdit ? "编辑特异体质记录" : "新增特异体质记录");
+
+  shRenderDraftImgs("parentImgs");
+  shRenderDraftImgs("hospitalImgs");
+
+  document.querySelectorAll("[data-act=sh-pick]").forEach(btn => {
+    btn.onclick = () => shPickImages(btn.dataset.kind);
+  });
+
+  document.querySelector("[data-act=modal-ok]").onclick = () => {
+    const name = document.getElementById("shName").value.trim();
+    if (!name) { toast("请填写学生姓名"); return; }
+    const obj = {
+      id: r.id || uid(),
+      name,
+      cls: document.getElementById("shCls").value,
+      illness: document.getElementById("shIllness").value,
+      note: document.getElementById("shNote").value.trim(),
+      parentImgs: shDraft.parentImgs.slice(),
+      hospitalImgs: shDraft.hospitalImgs.slice(),
+      createdAt: r.createdAt || new Date().toISOString()
+    };
+    const list = getSpecialHealth();
+    if (isEdit) {
+      const idx = list.findIndex(x => x.id === r.id);
+      if (idx >= 0) list[idx] = obj; else list.push(obj);
+    } else {
+      list.push(obj);
+    }
+    saveSpecialHealth(list);
+    closeModal();
+    const body = document.getElementById("classTabBody");
+    if (body) { body.innerHTML = renderSpecialHealth(); bindTabActions("special-health"); }
+    toast(isEdit ? "✅ 已更新记录" : "✅ 已新增记录");
+  };
+}
+
+/* 选择并压缩上传图片（kind: parentImgs | hospitalImgs） */
+function shPickImages(kind) {
+  const inp = document.createElement("input");
+  inp.type = "file";
+  inp.accept = "image/*";
+  inp.multiple = true;
+  inp.onchange = () => {
+    const files = Array.from(inp.files || []);
+    const remain = SH_MAX_IMG - shDraft[kind].length;
+    if (remain <= 0) { toast("每类最多 " + SH_MAX_IMG + " 张"); return; }
+    const todo = files.slice(0, remain);
+    if (!todo.length) return;
+    let pending = todo.length;
+    todo.forEach(f => {
+      const rd = new FileReader();
+      rd.onload = () => {
+        compressImage(rd.result, 800, 0.72, (data) => {
+          shDraft[kind].push(data);
+          pending--;
+          if (pending === 0) { shRenderDraftImgs(kind); toast("已上传 " + todo.length + " 张图片"); }
+        });
+      };
+      rd.onerror = () => { pending--; };
+      rd.readAsDataURL(f);
+    });
+  };
+  inp.click();
+}
+
+/* 重绘弹窗内某类图片缩略图（含单张删除） */
+function shRenderDraftImgs(kind) {
+  const box = document.getElementById("sh-draft-" + kind);
+  if (!box || !shDraft) return;
+  box.innerHTML = shDraft[kind].map((src, i) => `
+    <div style="position:relative;width:56px;height:56px;margin:2px">
+      <img src="${src}" style="width:56px;height:56px;object-fit:cover;border-radius:6px;border:1px solid var(--line);background:#f0f0f0">
+      <button data-act="sh-draft-del" data-kind="${kind}" data-i="${i}" style="position:absolute;top:-8px;right:-8px;width:20px;height:20px;border-radius:50%;border:none;background:#C0392B;color:#fff;font-size:11px;line-height:1;cursor:pointer">✕</button>
+    </div>`).join("");
+  box.querySelectorAll("[data-act=sh-draft-del]").forEach(b => {
+    b.onclick = () => { shDraft[b.dataset.kind].splice(+b.dataset.i, 1); shRenderDraftImgs(b.dataset.kind); };
+  });
+}
+
+/* 点击缩略图放大查看 */
+function shViewImage(src) {
+  openModal(`<img src="${src}" style="max-width:100%;max-height:68vh;border-radius:8px;margin:0 auto;display:block">`, "查看图片");
+  const ok = document.querySelector("[data-act=modal-ok]");
+  if (ok) { ok.textContent = "关闭"; ok.onclick = () => closeModal(); }
+}
+
+/* =========================================================
    班级管理 · 各 Tab 事件绑定
    ========================================================= */
 function bindTabActions(tab) {
@@ -71,6 +191,30 @@ function bindTabActions(tab) {
     });
     document.querySelector("[data-act=att-download]")?.addEventListener("click", () => exportScopeToCSV("考勤记录_" + Today.now(), "#classTabBody"));
     document.querySelector("[data-act=att-print]")?.addEventListener("click", () => window.print());
+  }
+
+  /* ---- 特异体质提醒 ---- */
+  if (tab === "special-health") {
+    document.querySelector("[data-act=sh-add]")?.addEventListener("click", () => shOpenForm(null));
+    document.querySelectorAll("[data-act=sh-edit]").forEach(btn => {
+      btn.onclick = () => {
+        const r = getSpecialHealth().find(x => x.id === btn.dataset.id);
+        if (r) shOpenForm(r);
+      };
+    });
+    document.querySelectorAll("[data-act=sh-del]").forEach(btn => {
+      btn.onclick = () => {
+        const id = btn.dataset.id;
+        if (!confirm("确定删除该学生的特异体质记录？删除后不可恢复。")) return;
+        saveSpecialHealth(getSpecialHealth().filter(x => x.id !== id));
+        const body = document.getElementById("classTabBody");
+        if (body) { body.innerHTML = renderSpecialHealth(); bindTabActions("special-health"); }
+        toast("已删除该记录");
+      };
+    });
+    document.querySelectorAll("[data-act=sh-img]").forEach(img => {
+      img.onclick = () => shViewImage(img.src);
+    });
   }
 
   /* ---- 分贝 ---- */
@@ -318,12 +462,7 @@ function bindSeatEvents() {
   });
 
   document.querySelector("[data-act=seat-import]")?.addEventListener("click", () => {
-    const students = getStudents();
-    if (!students.length) {
-      toast("请先在「学生信息」导入花名册和成绩");
-      return;
-    }
-    generateSeatsFromScores();
+    seatImportOpen();
   });
   document.querySelector("[data-act=seat-save]")?.addEventListener("click", () => {
     const saved = Store.get("seatLayout", {});
@@ -408,6 +547,151 @@ function generateSeatsFromScores() {
   body.innerHTML = renderSeatsEdit();
   bindSeatEvents();
   toast("✅ 已按成绩好中差自动排座（四人一组）");
+}
+
+/* =========================================================
+   座位表 · Excel 导入排座（姓名/性别/成绩/学习小组）
+   排座策略：按成绩 / 按学习小组 / 男女搭配
+   ========================================================= */
+let seatXlPending = null;
+let seatStrategy = "grade";
+function seatImportOpen() {
+  seatXlPending = null;
+  seatStrategy = "grade";
+  openModal(`
+    <div style="display:flex;flex-direction:column;gap:8px;text-align:left">
+      <button class="btn btn-primary" data-act="seat-xl-pick" style="width:100%;min-height:46px">📊 选择 Excel 文件（.xlsx / .csv）</button>
+      <div id="seatXlPreview" style="font-size:12px;color:var(--ink-light);line-height:1.6">表格需含 <b>姓名</b> 列，可选 <b>性别、成绩、学习小组</b> 列。<br>表头示例：<b>姓名、性别、总分、小组</b></div>
+      <div style="font-size:12.5px;font-weight:600;color:var(--ink-soft);margin-top:4px">排座方式：</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" data-act="seat-strategy" data-k="grade">📊 按成绩（好中差四人一组）</button>
+        <button class="btn btn-ghost btn-sm" data-act="seat-strategy" data-k="group">👥 按学习小组</button>
+        <button class="btn btn-ghost btn-sm" data-act="seat-strategy" data-k="gender">👫 男女搭配</button>
+      </div>
+    </div>`, "导入 Excel 排座");
+  document.querySelector("[data-act=seat-xl-pick]").onclick = () => seatPickExcel();
+  document.querySelectorAll("[data-act=seat-strategy]").forEach(b => {
+    b.onclick = () => {
+      seatStrategy = b.dataset.k;
+      document.querySelectorAll("[data-act=seat-strategy]").forEach(x => { x.classList.remove("btn-primary"); x.classList.add("btn-ghost"); });
+      b.classList.remove("btn-ghost"); b.classList.add("btn-primary");
+    };
+  });
+  document.querySelector("[data-act=modal-ok]").onclick = () => seatApplyImport();
+}
+/* 识别姓名/性别/成绩/学习小组列 */
+function seatMapSheet(rows) {
+  if (!rows || rows.length < 2) return null;
+  const nameAlias = ["姓名", "学生姓名", "学生", "名字", "name", "Name"];
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(rows.length, 3); i++) {
+    const row = (rows[i] || []).map(c => String(c == null ? "" : c).trim());
+    if (row.some(c => nameAlias.includes(c))) { headerIdx = i; break; }
+  }
+  if (headerIdx < 0) return null;
+  const header = rows[headerIdx].map(c => String(c == null ? "" : c).trim());
+  const nameIdx = header.findIndex(c => nameAlias.includes(c));
+  if (nameIdx < 0) return null;
+  const genderIdx = header.findIndex(c => c === "性别" || c === "sex" || c === "gender");
+  const scoreIdx = header.findIndex(c => /^(成绩|总分|分数|总成绩|score)$/.test(c));
+  const groupIdx = header.findIndex(c => /^(学习小组|小组|组|group)$/.test(c));
+  const items = [];
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const name = String(row[nameIdx] == null ? "" : row[nameIdx]).trim();
+    if (!name || /^(合计|总计|平均|均分)$/.test(name)) continue;
+    const g = genderIdx >= 0 ? String(row[genderIdx] == null ? "" : row[genderIdx]).trim() : "";
+    let score = null;
+    if (scoreIdx >= 0) {
+      const n = parseFloat(String(row[scoreIdx] == null ? "" : row[scoreIdx]).replace(/[^\d.\-]/g, ""));
+      if (!isNaN(n)) score = n;
+    }
+    const group = groupIdx >= 0 ? String(row[groupIdx] == null ? "" : row[groupIdx]).trim() : "";
+    items.push({ name, gender: g === "女" ? "女" : g === "男" ? "男" : "", score, group });
+  }
+  if (!items.length) return null;
+  return { items, hasGender: genderIdx >= 0, hasScore: scoreIdx >= 0, hasGroup: groupIdx >= 0 };
+}
+async function seatPickExcel() {
+  const preview = document.getElementById("seatXlPreview");
+  preview.innerHTML = "正在读取 Excel…";
+  try {
+    const files = await ExcelImport.pickFile();
+    if (!files || !files.length) { preview.innerHTML = "未选择文件"; return; }
+    const r = seatMapSheet(files[0].rows);
+    if (!r) { preview.innerHTML = "⚠️ 未能识别：请确保第一行为表头，且含「姓名」列"; return; }
+    seatXlPending = r;
+    const cols = ["姓名", "性别", "成绩", "学习小组"];
+    const bodyRows = r.items.map(it => `<tr><td>${esc(it.name)}</td><td>${esc(it.gender || "")}</td><td>${it.score != null ? it.score : ""}</td><td>${esc(it.group || "")}</td></tr>`).join("");
+    preview.innerHTML = `
+      <div style="color:var(--green-600);margin-bottom:6px">✅ 识别到 <b>${r.items.length}</b> 名学生${r.hasGroup ? " · 含学习小组" : ""}${r.hasGender ? " · 含性别" : ""}${r.hasScore ? " · 含成绩" : ""}</div>
+      <div class="tbl-wrap" style="max-height:220px;overflow:auto"><table class="tbl" style="font-size:12.5px">
+        <tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr>${bodyRows}
+      </table></div>`;
+  } catch (e) {
+    preview.innerHTML = "读取失败：" + esc(e.message || e);
+  }
+}
+function seatArrangeByGrade(items) {
+  const sorted = items.slice().sort((a, b) => (b.score || 0) - (a.score || 0));
+  const n = sorted.length;
+  sorted.forEach((s, i) => { const p = i / n; s.grade = p < 0.25 ? "A" : p < 0.5 ? "B" : p < 0.75 ? "C" : "D"; });
+  // 四档各取一人成组（优+良+中+待提升），组内蛇形
+  const A = sorted.filter(s => s.grade === "A");
+  const B = sorted.filter(s => s.grade === "B");
+  const C = sorted.filter(s => s.grade === "C");
+  const D = sorted.filter(s => s.grade === "D");
+  const groups = [];
+  const maxLen = Math.max(A.length, B.length, C.length, D.length);
+  for (let i = 0; i < maxLen; i++) {
+    const g = [];
+    if (A[i]) g.push(A[i]);
+    if (B[i]) g.push(B[i]);
+    if (C[i]) g.push(C[i]);
+    if (D[i]) g.push(D[i]);
+    if (g.length) groups.push(g);
+  }
+  let final = [];
+  groups.forEach((g, gi) => { if (gi % 2 === 1) g = g.slice().reverse(); final = final.concat(g); });
+  return final;
+}
+function seatArrangeByGroup(items) {
+  const buckets = {};
+  items.forEach(s => { const g = s.group || "未分组"; (buckets[g] = buckets[g] || []).push(s); });
+  const keys = Object.keys(buckets).sort();
+  let final = [];
+  keys.forEach(k => {
+    final = final.concat(buckets[k].sort((a, b) => (b.score || 0) - (a.score || 0)));
+  });
+  final.forEach((s, i) => { const p = i / final.length; s.grade = p < 0.25 ? "A" : p < 0.5 ? "B" : p < 0.75 ? "C" : "D"; });
+  return final;
+}
+function seatArrangeByGender(items) {
+  const males = items.filter(s => s.gender === "男").sort((a, b) => (b.score || 0) - (a.score || 0));
+  const females = items.filter(s => s.gender === "女").sort((a, b) => (b.score || 0) - (a.score || 0));
+  const result = [];
+  let mi = 0, fi = 0;
+  while (mi < males.length || fi < females.length) {
+    if (mi < males.length) result.push(males[mi++]);
+    if (fi < females.length) result.push(females[fi++]);
+  }
+  result.forEach((s, i) => { const p = i / result.length; s.grade = p < 0.25 ? "A" : p < 0.5 ? "B" : p < 0.75 ? "C" : "D"; });
+  return result;
+}
+function seatApplyImport() {
+  if (!seatXlPending) { toast("请先选择并识别 Excel 文件"); return; }
+  const items = seatXlPending.items.map(s => ({ name: s.name, gender: s.gender, score: s.score, group: s.group, grade: "" }));
+  let final;
+  if (seatStrategy === "group") final = seatArrangeByGroup(items);
+  else if (seatStrategy === "gender") final = seatArrangeByGender(items);
+  else final = seatArrangeByGrade(items);
+  Store.set("seats", final);
+  Store.del("seatLayout");
+  closeModal();
+  const body = document.getElementById("classTabBody");
+  if (body) { body.innerHTML = renderSeatsEdit(); bindSeatEvents(); }
+  const label = seatStrategy === "group" ? "学习小组" : seatStrategy === "gender" ? "男女搭配" : "成绩";
+  toast("✅ 已按" + label + "排座，可拖动微调");
 }
 
 /* ---- AI自动排座事件 + 逻辑 ---- */

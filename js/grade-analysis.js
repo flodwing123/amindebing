@@ -110,6 +110,7 @@ function renderGaInput() {
   return `
   <div class="card">
     <div class="card-title">📝 各科成绩录入
+      <button class="btn btn-primary btn-sm" data-act="ga-exam-xl">📊 导入 Excel</button>
       <button class="btn btn-primary btn-sm" data-act="ga-exam-save">💾 保存本次考试</button>
       <button class="btn btn-ghost btn-sm" data-act="ga-exam-export">⬇️ 导出考试列表</button>
     </div>
@@ -140,6 +141,117 @@ function renderGaInput() {
         <td><button class="btn btn-ghost btn-sm" data-act="ga-exam-del" data-id="${e.id}">🗑️ 删除</button></td></tr>`).join("")}
     </table></div>`}
   </div>`;
+}
+
+/* ---- A1.1 各科成绩 Excel 导入 ---- */
+const GA_SUBJ_ALIAS = { "语文": "chinese", "语": "chinese", "数学": "math", "数": "math", "英语": "english", "英": "english", "外语": "english", "道法": "daofa", "道德与法治": "daofa", "政治": "daofa", "品德": "daofa", "总分": "total", "总": "total" };
+const GA_NAME_ALIAS = ["姓名", "学生姓名", "学生", "名字", "name", "Name"];
+/* 识别表头 + 各科列，返回 {subjects:[{key,name,idx}], items:[{name,scores:{}}]} */
+function gaMapScoreSheet(rows) {
+  if (!rows || rows.length < 2) return null;
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(rows.length, 3); i++) {
+    const row = (rows[i] || []).map(c => String(c == null ? "" : c).trim());
+    const hasName = row.some(c => GA_NAME_ALIAS.includes(c));
+    const subjCount = row.filter(c => c && !GA_NAME_ALIAS.includes(c)).length;
+    if (hasName && subjCount >= 1) { headerIdx = i; break; }
+  }
+  if (headerIdx < 0) return null;
+  const header = rows[headerIdx].map(c => String(c == null ? "" : c).trim());
+  const nameIdx = header.findIndex(c => GA_NAME_ALIAS.includes(c));
+  if (nameIdx < 0) return null;
+  const subjects = [];
+  header.forEach((c, i) => {
+    if (i === nameIdx || !c) return;
+    subjects.push({ key: GA_SUBJ_ALIAS[c] || c, name: c, idx: i });
+  });
+  if (!subjects.length) return null;
+  const items = [];
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const name = String(row[nameIdx] == null ? "" : row[nameIdx]).trim();
+    if (!name || /^(合计|总计|平均|均分|平均分)$/.test(name)) continue;
+    const scores = {};
+    subjects.forEach(s => {
+      const v = row[s.idx];
+      if (v == null || String(v).trim() === "") return;
+      const n = parseFloat(String(v).replace(/[^\d.\-]/g, ""));
+      if (!isNaN(n) && n >= 0 && n <= 300) scores[s.key] = Math.round(n * 10) / 10;
+    });
+    items.push({ name, scores });
+  }
+  if (!items.length) return null;
+  return { subjects, items };
+}
+/* 总分：优先 Excel 总分列，否则语数英三科之和 */
+function gaCalcTotal(scores) {
+  if (typeof scores.total === "number") return scores.total;
+  const parts = ["chinese", "math", "english"].filter(k => typeof scores[k] === "number");
+  return parts.length ? Math.round(parts.reduce((a, k) => a + scores[k], 0) * 10) / 10 : null;
+}
+let gaXlPending = null;
+function gaExamImportOpen() {
+  const cls = gaState.cls || gaHomeClassName();
+  gaXlPending = null;
+  openModal(`
+    <div style="display:flex;flex-direction:column;gap:8px;text-align:left">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <select class="sel" id="gaXlCls" style="width:110px">${gaClasses().map(c => `<option value="${esc(c.name)}" ${c.name === cls ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>
+        <input class="inp" id="gaXlName" placeholder="考试名称（如：期中考试）" style="flex:1;min-width:140px">
+        <input class="inp" type="date" id="gaXlDate" value="${Today.now()}" style="width:140px">
+      </div>
+      <button class="btn btn-primary" data-act="ga-xl-pick" style="width:100%;min-height:46px">📊 选择 Excel 文件（.xlsx / .csv）</button>
+      <div id="gaXlPreview" style="font-size:12px;color:var(--ink-light);line-height:1.6">支持单科（姓名 + 一科）或多科（姓名 + 多科）成绩表。<br>表头示例：<b>姓名、语文、数学、英语、总分</b>（也支持道法、物理等任意科目列名）。</div>
+    </div>`, "导入 Excel 成绩");
+  document.querySelector("[data-act=ga-xl-pick]").onclick = () => gaExamPickExcel();
+  document.querySelector("[data-act=modal-ok]").onclick = () => gaExamApplyImport();
+}
+async function gaExamPickExcel() {
+  const preview = document.getElementById("gaXlPreview");
+  preview.innerHTML = "正在读取 Excel…";
+  try {
+    const files = await ExcelImport.pickFile();
+    if (!files || !files.length) { preview.innerHTML = "未选择文件"; return; }
+    const result = gaMapScoreSheet(files[0].rows);
+    if (!result) { preview.innerHTML = "⚠️ 未能识别：请确保第一行为表头，且含「姓名」列和至少一科成绩列"; return; }
+    gaXlPending = result;
+    const heads = ["姓名"].concat(result.subjects.map(s => s.name));
+    const bodyRows = result.items.map(it => {
+      const cells = [esc(it.name)].concat(result.subjects.map(s => {
+        const v = it.scores[s.key]; return v == null ? "" : v;
+      }));
+      return `<tr>${cells.map(c => `<td>${c}</td>`).join("")}</tr>`;
+    }).join("");
+    preview.innerHTML = `
+      <div style="color:var(--green-600);margin-bottom:6px">✅ 识别到 <b>${result.items.length}</b> 名学生 · <b>${result.subjects.length}</b> 个科目</div>
+      <div class="tbl-wrap" style="max-height:260px;overflow:auto"><table class="tbl" style="font-size:12.5px">
+        <tr>${heads.map(h => `<th>${esc(h)}</th>`).join("")}</tr>${bodyRows}
+      </table></div>`;
+  } catch (e) {
+    preview.innerHTML = "读取失败：" + esc(e.message || e);
+  }
+}
+function gaExamApplyImport() {
+  if (!gaXlPending) { toast("请先选择并识别 Excel 文件"); return; }
+  const name = (document.getElementById("gaXlName") || {}).value || "";
+  if (!name.trim()) { toast("请填写考试名称"); return; }
+  const date = (document.getElementById("gaXlDate") || {}).value || Today.now();
+  const cls = (document.getElementById("gaXlCls") || {}).value || gaState.cls;
+  const scores = {};
+  gaXlPending.items.forEach(it => {
+    const s = Object.assign({}, it.scores);
+    s.total = gaCalcTotal(s);
+    scores[it.name] = s;
+  });
+  const exams = gaExams();
+  const exist = exams.find(e => e.cls === cls && e.name === name.trim());
+  if (exist) { exist.date = date; exist.scores = scores; }
+  else { exams.push({ id: uid(), name: name.trim(), cls, date, scores }); }
+  Store.set("gradeExams", exams);
+  gaState.cls = cls;
+  closeModal();
+  gaRefresh();
+  toast(`✅ 已导入 ${Object.keys(scores).length} 名学生成绩「${cls} · ${name.trim()}」`);
 }
 
 /* ---- A2 单次分析 ---- */
@@ -412,6 +524,7 @@ function gaBindBody() {
 
   /* —— 录入：保存考试 —— */
   const btn = (act) => root.querySelector(`[data-act="${act}"]`);
+  if (btn("ga-exam-xl")) btn("ga-exam-xl").onclick = () => gaExamImportOpen();
   if (btn("ga-exam-save")) btn("ga-exam-save").onclick = () => {
     const name = (document.getElementById("gaExamName") || {}).value || "";
     const date = (document.getElementById("gaExamDate") || {}).value || Today.now();
