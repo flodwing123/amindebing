@@ -654,10 +654,49 @@ function bindParentEvents() {
     bindParentEvents();
   });
   document.querySelector("[data-act=parent-import]")?.addEventListener("click", () => {
-    openModal(`<p style="font-size:12.5px;color:var(--ink-light);margin-bottom:8px">每行一条：学生姓名,家长姓名,关系,电话,备注（逗号分隔）</p>
-      <textarea class="tarea" id="inpParentCSV" rows="8" style="width:100%" placeholder="张三,张爸爸,爸爸,13800000000,&#10;李四,李妈妈,妈妈,13900000000,"></textarea>`, "粘贴导入家长联系方式");
+    openModal(`
+      <button class="btn btn-primary" data-act="parent-xl" style="width:100%;min-height:46px">📊 选择 Excel 文件（.xlsx / .csv）</button>
+      <p style="font-size:12px;color:var(--ink-light);margin:8px 0 10px">自动识别列：<b>学生姓名、家长姓名、关系、电话、备注</b>（列顺序不限，多余列忽略）。</p>
+      <div id="parentXlPreview"></div>
+      <div style="border-top:1px dashed var(--line);margin-top:10px;padding-top:10px">
+        <p style="font-size:12.5px;color:var(--ink-light);margin-bottom:6px">—— 或粘贴，每行一条：学生姓名,家长姓名,关系,电话,备注 ——</p>
+        <textarea class="tarea" id="inpParentCSV" rows="6" style="width:100%" placeholder="张三,张爸爸,爸爸,13800000000,&#10;李四,李妈妈,妈妈,13900000000,"></textarea>
+      </div>`, "导入家长联系方式");
+    let pendingXl = null;
+    document.querySelector("[data-act=parent-xl]")?.addEventListener("click", async () => {
+      const sheets = await ExcelImport.pickFile();
+      if (!sheets) return;
+      const schema = [
+        { key: "student", alias: ["学生", "学生姓名", "姓名"] },
+        { key: "name", alias: ["家长姓名", "家长", "联系人", "父亲", "母亲", "家长名字"] },
+        { key: "rel", alias: ["关系", "称呼", "称谓"] },
+        { key: "phone", alias: ["电话", "手机", "手机号", "联系电话", "联系方式", "电话号码"] },
+        { key: "note", alias: ["备注"] }
+      ];
+      pendingXl = [];
+      sheets.forEach(sh => {
+        const { items } = ExcelImport.mapSheet(sh.rows, schema, { student: 0, name: 1, rel: 2, phone: 3, note: 4 });
+        items.forEach(it => { if (it.student || it.name || it.phone) pendingXl.push(it); });
+      });
+      if (!pendingXl.length) { toast("没有识别到家长信息"); pendingXl = null; return; }
+      document.getElementById("parentXlPreview").innerHTML = `<div style="background:#f0f7f4;border:1px solid #B7CEC0;border-radius:10px;padding:10px;font-size:13px">
+        <b style="color:var(--green-700)">✅ 已读取 ${pendingXl.length} 条家长信息</b>（如：${esc(String((pendingXl[0].student || "") + " " + (pendingXl[0].name || "")).trim())}…），点下方「确定」导入</div>`;
+    });
     const ok = document.querySelector("[data-act=modal-ok]");
     ok.onclick = () => {
+      if (pendingXl) {
+        const list = Store.get("parentContacts", []);
+        pendingXl.forEach(it => list.push({
+          student: String(it.student || "").trim(), name: String(it.name || "").trim(),
+          rel: String(it.rel || "").trim(), phone: String(it.phone || "").trim(), note: String(it.note || "").trim()
+        }));
+        Store.set("parentContacts", list);
+        closeModal();
+        body.innerHTML = renderParentContacts();
+        bindParentEvents();
+        toast("✅ 已从 Excel 导入家长信息，共 " + list.length + " 条");
+        return;
+      }
       const raw = document.getElementById("inpParentCSV").value.trim();
       if (!raw) return;
       const list = Store.get("parentContacts", []);
@@ -838,7 +877,7 @@ function bindDecibel() {
    ========================================================= */
 registerModule("homework", {
   title: "📝 作业提效",
-  sub: "5个班作业/背书/默写登记 · 家校批改 · 每日50条反馈金句",
+  sub: "各班作业/背书/默写登记 · 家校批改 · 每日50条反馈金句",
   render() {
     const classes = Store.get("classes", defaultClasses());
     const hw = Store.get("hwRecords", {});
@@ -850,13 +889,11 @@ registerModule("homework", {
       <p class="mv-sub">${esc(today)} · 今天是 ${quotes.length} 条金句可供反馈</p></div>
     ${modToolbar("作业提效")}
     <div class="big-tab-grid g2" id="hwTabs">
-      <div class="big-tab theme-teal active" data-hwtab="hw"><span class="bt-ico">📚</span><div><div class="bt-name">作业登记</div><div class="bt-desc">5班勾选表</div></div></div>
+      <div class="big-tab theme-teal active" data-hwtab="hw"><span class="bt-ico">📚</span><div><div class="bt-name">作业登记</div><div class="bt-desc">各班勾选表</div></div></div>
       <div class="big-tab theme-blue" data-hwtab="board"><span class="bt-ico">📊</span><div><div class="bt-name">统计看板</div><div class="bt-desc">3次不交/全勤</div></div></div>
       <div class="big-tab theme-gold" data-hwtab="recite"><span class="bt-ico">📖</span><div><div class="bt-name">背书登记</div><div class="bt-desc">背诵过关记录</div></div></div>
       <div class="big-tab theme-coral" data-hwtab="dict"><span class="bt-ico">✍️</span><div><div class="bt-name">默写登记</div><div class="bt-desc">默写过关记录</div></div></div>
       <div class="big-tab theme-lav" data-hwtab="quote"><span class="bt-ico">💬</span><div><div class="bt-name">每日金句</div><div class="bt-desc">50条正能量</div></div></div>
-    </div><div class="bt-desc">5个班作业/背书/默写/家校批改</div></div></div>
-      <div class="big-tab theme-gold" data-hwtab="quote"><span class="bt-ico">💬</span><div><div class="bt-name">每日金句</div><div class="bt-desc">50条鼓励文案 ×${quotes.length} 可复制</div></div></div>
     </div>
     <div id="hwTabBody">${renderHwReg()}</div>`;
     return html;
@@ -901,7 +938,7 @@ function renderHwSheet(c, r, students) {
       <summary>${esc(c.name)} ${c.isHome ? '<span class="badge badge-green">班主任班</span>' : ""} <span class="hw-empty-tag">未导入花名册</span></summary>
       <div class="db-body">
         <div class="empty"><span class="e-ico">📋</span>该班还没有学生名单。<br>
-          请到「学生信息 → 花名册」粘贴导入，或
+          请到「学生信息 → 花名册」导入 Excel，或
           <button class="btn btn-primary btn-sm" style="margin-top:8px" data-act="hw-import" data-cid="${c.id}" data-cname="${esc(c.name)}">📥 快速导入 ${esc(c.name)} 名单</button></div>
       </div></details>`;
   }
@@ -1169,11 +1206,49 @@ function bindHwTab(tab) {
     body.querySelectorAll("[data-act=hw-import]").forEach(btn => {
       btn.onclick = () => {
         const cname = btn.dataset.cname;
-        openModal(`<p style="font-size:13px;color:var(--ink-light);margin-bottom:8px">粘贴 ${esc(cname)} 名单，每行一个学生，格式：<b>姓名,性别</b>（如：张三,男）</p>
-          <textarea class="inp" id="inpHwRoster" rows="10" placeholder="张三,男&#10;李四,女"></textarea>
-          <div style="margin-top:8px;font-size:12px;color:var(--ink-light)">也可以从 Excel 整列复制粘贴（自动跳过表头行）</div>`, "📥 导入 " + cname + " 花名册");
+        openModal(`
+          <button class="btn btn-primary" data-act="hw-xl" style="width:100%;min-height:46px">📊 选择 Excel 文件（.xlsx / .csv）</button>
+          <p style="font-size:12px;color:var(--ink-light);margin:8px 0 10px">自动识别「姓名、性别」两列（列顺序不限）；默认导入到 <b>${esc(cname)}</b>。若 Excel 里有多个工作表且表名正好是班级名，会自动对应到各班。</p>
+          <div id="hwXlPreview"></div>
+          <div style="border-top:1px dashed var(--line);margin-top:10px;padding-top:10px">
+            <p style="font-size:12px;color:var(--ink-light);margin-bottom:4px">—— 或粘贴名单，每行一个学生：姓名,性别（如：张三,男）——</p>
+            <textarea class="inp" id="inpHwRoster" rows="6" placeholder="张三,男&#10;李四,女"></textarea>
+          </div>`, "📥 导入 " + cname + " 花名册");
+        let pendingXl = null;
+        document.querySelector("[data-act=hw-xl]")?.addEventListener("click", async () => {
+          const sheets = await ExcelImport.pickFile();
+          if (!sheets) return;
+          const classes = Store.get("classes", defaultClasses());
+          const schema = [
+            { key: "name", alias: ["姓名", "学生姓名", "学生", "名字"] },
+            { key: "gender", alias: ["性别"] }
+          ];
+          pendingXl = sheets.map(sh => {
+            const { items } = ExcelImport.mapSheet(sh.rows, schema, { name: 0, gender: 1 });
+            const matched = classes.find(c => c.name === sh.name.trim());
+            return { sheet: sh.name, cls: matched ? matched.name : cname, items: items.filter(x => x.name && !/^(姓名|学生|名字)$/i.test(x.name)) };
+          }).filter(x => x.items.length);
+          if (!pendingXl.length) { toast("没有识别到名单"); pendingXl = null; return; }
+          document.getElementById("hwXlPreview").innerHTML = `<div style="background:#f0f7f4;border:1px solid #B7CEC0;border-radius:10px;padding:10px;font-size:13px">
+            <b style="color:var(--green-700)">✅ 已读取：</b><br>${pendingXl.map(x => `${esc(x.sheet)} → <b>${esc(x.cls)}</b>（${x.items.length} 人）`).join("<br>")}</div>`;
+        });
         const ok = document.querySelector("[data-act=modal-ok]");
         if (ok) ok.onclick = () => {
+          if (pendingXl) {
+            const all = Store.get("students", {});
+            let n = 0;
+            pendingXl.forEach(x => {
+              all[x.cls] = x.items.map(s => ({ name: String(s.name).trim(), gender: s.gender === "女" ? "女" : "男" }));
+              n += all[x.cls].length;
+            });
+            if (!n) { toast("没有识别到名单"); return; }
+            Store.set("students", all);
+            closeModal();
+            const bodyEl = document.getElementById("hwTabBody");
+            if (bodyEl) { bodyEl.innerHTML = renderHwReg(); bindHwTab("hw"); }
+            toast(`✅ 已从 Excel 导入 ${n} 人`);
+            return;
+          }
           const raw = document.getElementById("inpHwRoster").value;
           const list = [];
           raw.split(/\n+/).forEach(line => {
@@ -1270,7 +1345,7 @@ registerModule("student", {
       <p class="mv-sub">${names.length} 个班 · ${allStudents().length} 名学生</p></div>
     ${modToolbar("学生信息")}
     <div class="big-tab-grid g4" id="stuTabs">
-      <div class="big-tab theme-teal active" data-stutab="roster"><span class="bt-ico">📋</span><div><div class="bt-name">花名册</div><div class="bt-desc">5班名单 · 导入</div></div></div>
+      <div class="big-tab theme-teal active" data-stutab="roster"><span class="bt-ico">📋</span><div><div class="bt-name">花名册</div><div class="bt-desc">4班名单 · Excel 导入</div></div></div>
       <div class="big-tab theme-blue" data-stutab="profile"><span class="bt-ico">📁</span><div><div class="bt-name">个人档案</div><div class="bt-desc">学生信息详情</div></div></div>
       <div class="big-tab theme-coral" data-stutab="io"><span class="bt-ico">📦</span><div><div class="bt-name">导入导出</div><div class="bt-desc">批量导入导出</div></div></div>
       <div class="big-tab theme-gold" data-stutab="report"><span class="bt-ico">📄</span><div><div class="bt-name">个人报告</div><div class="bt-desc">导出学生报告</div></div></div>
@@ -1299,8 +1374,8 @@ function renderRoster() {
   const classes = Store.get("classes", defaultClasses());
   const students = Store.get("students", {});
   let html = `<div class="card">
-    <div class="card-title">📋 花名册 <span class="sub">粘贴表格数据导入（姓名,性别,语文,数学,英语,总分,出生年月...）</span>
-      <button class="btn btn-primary btn-sm" data-act="stu-import">📥 导入数据</button>
+    <div class="card-title">📋 花名册 <span class="sub">支持 Excel 文件直接导入（自动识别：姓名,性别,语文,数学,英语,总分,出生年月）</span>
+      <button class="btn btn-primary btn-sm" data-act="stu-import">📥 导入 Excel</button>
       <button class="btn btn-ghost btn-sm" data-act="stu-download">⬇️ 下载当前</button>
       <button class="btn btn-ghost btn-sm" data-act="stu-birthdays">🎂 本月生日</button>
     </div>
@@ -1310,7 +1385,7 @@ function renderRoster() {
       return `<details class="details-box" ${c.isHome ? "open" : ""}>
       <summary>${esc(c.name)}（${list.length}人）${c.isHome ? ' <span class="badge badge-green">班主任班</span>' : ""}</summary>
       <div class="db-body">
-        ${list.length === 0 ? `<div class="empty"><span class="e-ico">📋</span>暂无学生数据，点击「导入数据」粘贴表格</div>` : `
+        ${list.length === 0 ? `<div class="empty"><span class="e-ico">📋</span>暂无学生数据，点击「导入 Excel」选择花名册文件</div>` : `
         <div class="tbl-wrap"><table class="tbl"><tr><th class="num">#</th><th>姓名</th><th>性别</th><th>🎂 出生年月</th><th>语文</th><th>数学</th><th>英语</th><th>总分</th><th>排名</th></tr>
         ${list.slice().sort((a, b) => (b.total || 0) - (a.total || 0)).map((s, i) => `
           <tr><td class="num">${i + 1}</td><td>${esc(s.name)} ${s.birthday ? `<button class="bday-edit" data-act="stu-bday" data-name="${esc(s.name)}" data-cls="${esc(c.name)}" title="修改出生年月">🎂</button>` : `<button class="bday-edit bday-empty" data-act="stu-bday" data-name="${esc(s.name)}" data-cls="${esc(c.name)}" title="设置出生年月（开启生日提醒）">🎂</button>`}</td>
@@ -1428,14 +1503,79 @@ function bindStuTab(tab) {
   const body = document.getElementById("stuTabBody");
   if (tab === "roster") {
     document.querySelector("[data-act=stu-import]")?.addEventListener("click", () => {
+      const classes = Store.get("classes", defaultClasses());
       openModal(`
-        <select class="inp" id="inpStuClass" style="margin-bottom:8px">
-          ${Store.get("classes", defaultClasses()).map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("")}
-        </select>
-        <p style="font-size:12px;color:var(--ink-light);margin-bottom:6px">从 Excel/表格复制数据后粘贴到这里（表头：姓名,性别,语文,数学,英语,总分,出生年月；出生年月格式如 2010-05-12，可留空）</p>
-        <textarea class="tarea" id="inpStuCSV" rows="10" style="width:100%" placeholder="张三,男,98,100,95,293,2010-05-12&#10;李四,女,95,98,99,292,2010-08-03"></textarea>`, "导入学生数据");
+        <button class="btn btn-primary" data-act="stu-xl" style="width:100%;min-height:46px">📊 选择 Excel 文件（.xlsx / .csv）</button>
+        <p style="font-size:12px;color:var(--ink-light);margin:8px 0 10px">推荐做法：一个 Excel 文件里每个班一个工作表，<b>工作表名 = 班级名</b>（1班 / 2班 / 3班 / 创新班），一次导入全部班级。<br>自动识别列：姓名、性别、语文、数学、英语、总分、出生年月（列顺序不限，多余列忽略；出生年月支持 2010-05-12、2010/5/12、2010年5月12日）。</p>
+        <div id="stuXlPreview"></div>
+        <div style="border-top:1px dashed var(--line);margin-top:10px;padding-top:10px">
+          <p style="font-size:12px;color:var(--ink-light);margin-bottom:4px">—— 或选择班级后粘贴数据（表头：姓名,性别,语文,数学,英语,总分,出生年月）——</p>
+          <select class="inp" id="inpStuClass" style="margin-bottom:8px">
+            ${classes.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("")}
+          </select>
+          <textarea class="tarea" id="inpStuCSV" rows="6" style="width:100%" placeholder="张三,男,98,100,95,293,2010-05-12&#10;李四,女,95,98,99,292,2010-08-03"></textarea>
+        </div>`, "导入学生数据");
+      let pendingXl = null;
+      document.querySelector("[data-act=stu-xl]")?.addEventListener("click", async () => {
+        const sheets = await ExcelImport.pickFile();
+        if (!sheets) return;
+        const schema = [
+          { key: "name", alias: ["姓名", "学生姓名", "学生", "名字"] },
+          { key: "gender", alias: ["性别"] },
+          { key: "chinese", alias: ["语文"] },
+          { key: "math", alias: ["数学"] },
+          { key: "english", alias: ["英语"] },
+          { key: "total", alias: ["总分"] },
+          { key: "birthday", alias: ["出生年月", "出生日期", "生日", "出生"] }
+        ];
+        pendingXl = sheets.map(sh => {
+          const { items } = ExcelImport.mapSheet(sh.rows, schema, { name: 0, gender: 1, chinese: 2, math: 3, english: 4, total: 5, birthday: 6 });
+          const matched = classes.find(c => c.name === sh.name.trim());
+          return { sheet: sh.name, cls: matched ? matched.name : "", items: items.filter(x => x.name && !/^(姓名|学生|名字|name)$/i.test(x.name) && !/^(合计|总计|平均分?|均分|平均)$/.test(x.name)) };
+        }).filter(x => x.items.length);
+        if (!pendingXl.length) { toast("没有识别到学生数据"); pendingXl = null; return; }
+        document.getElementById("stuXlPreview").innerHTML = `
+          <div style="background:#f0f7f4;border:1px solid #B7CEC0;border-radius:10px;padding:10px">
+            <b style="color:var(--green-700)">✅ 已读取文件，请确认每个工作表对应的班级：</b>
+            ${pendingXl.map((x, i) => `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
+              <span style="font-size:13px;flex:1;min-width:140px">${esc(x.sheet)}（${x.items.length} 人，如 ${esc(x.items.slice(0, 2).map(s => s.name).join("、"))}…）</span>
+              <select class="inp xl-cls-sel" data-i="${i}" style="width:auto">
+                ${classes.map(c => `<option value="${esc(c.name)}" ${c.name === x.cls ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+              </select></div>`).join("")}
+          </div>`;
+      });
       const ok = document.querySelector("[data-act=modal-ok]");
       ok.onclick = () => {
+        /* Excel 导入 */
+        if (pendingXl) {
+          const all = Store.get("students", {});
+          let n = 0;
+          pendingXl.forEach((x, i) => {
+            const sel = document.querySelector(".xl-cls-sel[data-i=\"" + i + "\"]");
+            const cls = sel ? sel.value : "";
+            if (!cls) return;
+            all[cls] = x.items.map(s => {
+              const o = { name: String(s.name).trim(), gender: String(s.gender || "").trim() };
+              ["chinese", "math", "english", "total"].forEach(k => {
+                const v = String(s[k] == null ? "" : s[k]).trim();
+                if (v !== "" && !isNaN(+v)) o[k] = +v;
+              });
+              if (o.total == null && (o.chinese != null || o.math != null || o.english != null)) o.total = (o.chinese || 0) + (o.math || 0) + (o.english || 0);
+              const bd = ExcelImport.toDate(s.birthday);
+              if (bd) o.birthday = bd;
+              return o;
+            });
+            n += all[cls].length;
+          });
+          if (!n) { toast("未识别到有效数据"); return; }
+          Store.set("students", all);
+          closeModal();
+          body.innerHTML = renderRoster();
+          bindStuTab("roster");
+          toast(`✅ 已从 Excel 导入 ${n} 名学生`);
+          return;
+        }
+        /* 粘贴导入 */
         const cls = document.getElementById("inpStuClass").value;
         const raw = document.getElementById("inpStuCSV").value.trim();
         if (!raw) return;
@@ -1531,6 +1671,114 @@ function bindStuTab(tab) {
       </div>`, "🎂 本月生日（" + ym + "）");
       const ok = document.querySelector("[data-act=modal-ok]");
       if (ok) ok.onclick = closeModal;
+    });
+  }
+  if (tab === "io") {
+    const classes = Store.get("classes", defaultClasses());
+    const result = (html) => { const el = document.getElementById("ioResult"); if (el) el.innerHTML = html; };
+    /* Excel 多班导入 */
+    document.querySelector("[data-act=stu-io-xl]")?.addEventListener("click", async () => {
+      const sheets = await ExcelImport.pickFile();
+      if (!sheets) return;
+      const schema = [
+        { key: "cls", alias: ["班级"] },
+        { key: "name", alias: ["姓名", "学生姓名", "学生", "名字"] },
+        { key: "gender", alias: ["性别"] },
+        { key: "chinese", alias: ["语文"] },
+        { key: "math", alias: ["数学"] },
+        { key: "english", alias: ["英语"] },
+        { key: "total", alias: ["总分"] },
+        { key: "birthday", alias: ["出生年月", "出生日期", "生日", "出生"] }
+      ];
+      const grouped = {};
+      sheets.forEach(sh => {
+        const matched = classes.find(c => c.name === sh.name.trim());
+        const { items } = ExcelImport.mapSheet(sh.rows, schema, { cls: 0, name: 1, gender: 2, chinese: 3, math: 4, english: 5, total: 6, birthday: 7 });
+        items.forEach(s => {
+          const cls = (s.cls && classes.some(c => c.name === String(s.cls).trim()) && String(s.cls).trim()) || (matched ? matched.name : "");
+          if (!cls) return;
+          if (!s.name || /^(姓名|学生|名字|name)$/i.test(s.name) || /^(合计|总计|平均分?|均分)$/.test(s.name)) return;
+          (grouped[cls] = grouped[cls] || []).push(s);
+        });
+      });
+      const clsNames = Object.keys(grouped);
+      if (!clsNames.length) {
+        result(`<div style="font-size:13px;color:#b91c1c">没有识别到有效数据。请确保：工作表名是班级名（1班/2班/3班/创新班），或数据里有「班级」列。</div>`);
+        return;
+      }
+      const all = Store.get("students", {});
+      let n = 0;
+      clsNames.forEach(cls => {
+        all[cls] = grouped[cls].map(s => {
+          const o = { name: String(s.name).trim(), gender: String(s.gender || "").trim() };
+          ["chinese", "math", "english", "total"].forEach(k => {
+            const v = String(s[k] == null ? "" : s[k]).trim();
+            if (v !== "" && !isNaN(+v)) o[k] = +v;
+          });
+          if (o.total == null && (o.chinese != null || o.math != null || o.english != null)) o.total = (o.chinese || 0) + (o.math || 0) + (o.english || 0);
+          const bd = ExcelImport.toDate(s.birthday);
+          if (bd) o.birthday = bd;
+          return o;
+        });
+        n += all[cls].length;
+      });
+      Store.set("students", all);
+      result(`<div style="font-size:13px;color:var(--green-700)"><b>✅ 已导入 ${n} 名学生：</b><br>${clsNames.map(c => `${esc(c)}（${grouped[c].length} 人）`).join("<br>")}</div>`);
+      toast(`✅ 已从 Excel 导入 ${n} 名学生`);
+    });
+    /* 粘贴批量导入 */
+    document.querySelector("[data-act=stu-io-import]")?.addEventListener("click", () => {
+      const raw = (document.getElementById("ioTextarea") || {}).value || "";
+      const lines = raw.split(/\n+/).map(l => l.trim()).filter(Boolean);
+      if (!lines.length) { toast("请先粘贴数据"); return; }
+      const all = Store.get("students", {});
+      const stats = {};
+      lines.forEach(line => {
+        const parts = line.split(/[,，\t]/).map(x => x.trim());
+        const cls = parts[0];
+        if (!cls || !parts[1] || /^(姓名|学生|name)$/i.test(parts[1])) return;
+        const o = { name: parts[1], gender: parts[2] || "" };
+        const subj = { 3: "chinese", 4: "math", 5: "english", 6: "total" };
+        for (let i = 3; i < parts.length; i++) if (subj[i] && parts[i] !== "" && !isNaN(+parts[i])) o[subj[i]] = +parts[i];
+        if (o.total == null && (o.chinese || o.math || o.english)) o.total = (o.chinese || 0) + (o.math || 0) + (o.english || 0);
+        const bd = ExcelImport.toDate(parts[7]);
+        if (bd) o.birthday = bd;
+        (all[cls] = all[cls] || []).push(o);
+        stats[cls] = (stats[cls] || 0) + 1;
+      });
+      const clsNames = Object.keys(stats);
+      if (!clsNames.length) { toast("未识别到有效数据"); return; }
+      Store.set("students", all);
+      const total = Object.values(stats).reduce((a, b) => a + b, 0);
+      result(`<div style="font-size:13px;color:var(--green-700)"><b>✅ 已导入 ${total} 名学生：</b><br>${clsNames.map(c => `${esc(c)}（${stats[c]} 人）`).join("<br>")}</div>`);
+      toast(`✅ 已导入 ${total} 名学生`);
+    });
+    /* 导出全部 */
+    document.querySelector("[data-act=stu-io-export-all]")?.addEventListener("click", () => {
+      const students = Store.get("students", {});
+      const lines = ["班级,姓名,性别,语文,数学,英语,总分,出生年月"];
+      classes.forEach(c => (students[c.name] || []).forEach(s => {
+        lines.push([c.name, s.name, s.gender, s.chinese ?? "", s.math ?? "", s.english ?? "", s.total ?? "", s.birthday ?? ""].join(","));
+      }));
+      if (lines.length === 1) { toast("暂无学生数据可导出"); return; }
+      downloadFile("花名册_全部_" + Today.now() + ".csv", "\ufeff" + lines.join("\n"), "text/csv;charset=utf-8");
+      toast("已导出全部花名册");
+    });
+    /* 按班级导出 */
+    document.querySelector("[data-act=stu-io-export-cls]")?.addEventListener("click", () => {
+      openModal(`<select class="inp" id="ioExpCls" style="width:100%">${classes.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join("")}</select>`, "选择要导出的班级");
+      const ok = document.querySelector("[data-act=modal-ok]");
+      ok.onclick = () => {
+        const cls = document.getElementById("ioExpCls").value;
+        const students = Store.get("students", {});
+        const list = students[cls] || [];
+        if (!list.length) { toast(cls + " 暂无学生数据"); return; }
+        const lines = ["姓名,性别,语文,数学,英语,总分,出生年月"];
+        list.forEach(s => lines.push([s.name, s.gender, s.chinese ?? "", s.math ?? "", s.english ?? "", s.total ?? "", s.birthday ?? ""].join(",")));
+        downloadFile("花名册_" + cls + "_" + Today.now() + ".csv", "\ufeff" + lines.join("\n"), "text/csv;charset=utf-8");
+        closeModal();
+        toast("已导出 " + cls + " 花名册");
+      };
     });
   }
   if (tab === "comment") {
@@ -2146,17 +2394,19 @@ function renderStuIO() {
   const total = Object.values(students).flat().length;
   return `<div class="card">
     <div class="card-title">📦 信息导入导出 <span class="sub">${total} 名学生</span></div>
-    <div style="font-size:13px;color:var(--ink-light);margin-bottom:16px;line-height:1.7">
-      <b>导入格式：</b>每行一名学生，用逗号分隔：<code>班级,姓名,性别,语文,数学,英语,总分,出生年月</code><br>
-      <b>示例：</b><code>701班,张三,男,85,90,88,263,2010-05-12</code>
+    <div style="font-size:13px;color:var(--ink-light);margin-bottom:12px;line-height:1.7">
+      <b>Excel 导入（推荐）：</b>每个班一个工作表（表名 = 班级名），或数据里有「班级」列，自动分班。<br>
+      自动识别列：班级、姓名、性别、语文、数学、英语、总分、出生年月（列顺序不限）。
     </div>
-    <div style="margin-bottom:12px">
-      <textarea class="inp" id="ioTextarea" rows="8" placeholder="粘贴学生数据（每行一名学生）&#10;701班,张三,男,85,90,88,263,2010-05-12&#10;701班,李四,女,78,92,85,255,"></textarea>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-primary" data-act="stu-io-import">📥 批量导入</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <button class="btn btn-primary" data-act="stu-io-xl">📊 Excel 导入（多班）</button>
       <button class="btn btn-ghost" data-act="stu-io-export-all">⬇️ 导出全部（CSV）</button>
       <button class="btn btn-ghost" data-act="stu-io-export-cls">⬇️ 按班级导出</button>
+    </div>
+    <div style="border-top:1px dashed var(--line);padding-top:10px">
+      <p style="font-size:12px;color:var(--ink-light);margin-bottom:6px">—— 或粘贴批量数据，每行一名学生：<code>班级,姓名,性别,语文,数学,英语,总分,出生年月</code> ——</p>
+      <textarea class="inp" id="ioTextarea" rows="6" placeholder="1班,张三,男,85,90,88,263,2010-05-12&#10;1班,李四,女,78,92,85,255,"></textarea>
+      <button class="btn btn-primary btn-sm" data-act="stu-io-import" style="margin-top:8px">📥 粘贴导入</button>
     </div>
     <div id="ioResult" style="margin-top:12px"></div>
   </div>`;

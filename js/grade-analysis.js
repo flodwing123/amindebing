@@ -331,14 +331,15 @@ function renderGaB() {
   return `
   <div class="card">
     <div class="card-title">📥 导入道法成绩
-      <button class="btn btn-primary btn-sm" data-act="ga-df-save">💾 保存导入</button>
-      <button class="btn btn-ghost btn-sm" data-act="ga-df-report">📄 导出5班整体报告</button>
+      <button class="btn btn-primary btn-sm" data-act="ga-df-xl">📊 Excel 导入</button>
+      <button class="btn btn-primary btn-sm" data-act="ga-df-save">💾 保存粘贴</button>
+      <button class="btn btn-ghost btn-sm" data-act="ga-df-report">📄 导出整体报告</button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start">
       <select class="sel" id="gaDfCls" style="width:110px">${gaClasses().map(c => `<option value="${esc(c.name)}" ${c.name === cls ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>
       <textarea class="tarea" id="gaDfPaste" placeholder="每行一名学生：姓名,分数&#10;例如：&#10;张三,85&#10;李四,72" style="flex:1;min-width:240px;min-height:110px"></textarea>
     </div>
-    <div style="font-size:12px;color:var(--ink-light);margin-top:8px">💡 每次导入会追加为该生的“下一次成绩”，可多次导入形成趋势；同一学生姓名自动匹配历史记录。</div>
+    <div style="font-size:12px;color:var(--ink-light);margin-top:8px">💡 每次导入会追加为该生的“下一次成绩”，可多次导入形成趋势；同一学生姓名自动匹配历史记录。<br>📊 Excel 导入：自动识别「姓名 + 分数（道法/成绩）」两列；若工作表名正好是班级名（1班/2班/3班/创新班），会自动分班，一次导入多个班。</div>
   </div>
   <div class="card">
     <div class="card-title">🏫 各班道法概况（最新一次）</div>
@@ -359,7 +360,7 @@ function renderGaB() {
    ========================================================= */
 registerModule("grade", {
   title: "📊 成绩分析",
-  sub: "班主任三科分析 · 进退步 · 道法科任5班分析",
+  sub: "班主任三科分析 · 进退步 · 道法科任分析",
   render() {
     return `
     <div class="mv-header"><h2 class="mv-title">📊 成绩分析</h2>
@@ -369,7 +370,7 @@ registerModule("grade", {
       <div class="big-tab theme-teal ${gaTopTab === "A" ? "active" : ""}" data-gatab="A">
         <span class="bt-ico">🏫</span><div><div class="bt-name">班主任 · 班级综合成绩</div><div class="bt-desc">录入 / 单次分析 / 个人趋势 / 进退步</div></div></div>
       <div class="big-tab theme-blue ${gaTopTab === "B" ? "active" : ""}" data-gatab="B">
-        <span class="bt-ico">📖</span><div><div class="bt-name">道法科任 · 5班成绩分析</div><div class="bt-desc">导入 / 进步退步波动 / 整体报告</div></div></div>
+        <span class="bt-ico">📖</span><div><div class="bt-name">道法科任 · 各班成绩分析</div><div class="bt-desc">导入 / 进步退步波动 / 整体报告</div></div></div>
     </div>
     <div id="gaBody">${gaTopTab === "A" ? renderGaA() : renderGaB()}</div>`;
   },
@@ -515,9 +516,43 @@ function gaBindBody() {
     gaState.dfCls = cls;
     gaRefresh();
   };
+  /* —— 道法：Excel 导入 —— */
+  if (btn("ga-df-xl")) btn("ga-df-xl").onclick = async () => {
+    const sheets = await ExcelImport.pickFile();
+    if (!sheets) return;
+    const schema = [
+      { key: "name", alias: ["姓名", "学生姓名", "学生", "名字"] },
+      { key: "score", alias: ["分数", "道法", "道德与法治", "道法成绩", "成绩", "得分", "政治", "品德"] }
+    ];
+    const clsList = gaClasses();
+    const df = gaDaofa();
+    const summary = [];
+    sheets.forEach(sh => {
+      const matched = clsList.find(c => c.name === sh.name.trim());
+      /* 只有单表且表名不是班级名时，才用下拉框选中的班级 */
+      const cls = matched ? matched.name : (sheets.length === 1 ? ((dfCls ? dfCls.value : gaState.dfCls) || gaHomeClassName()) : "");
+      if (!cls) { summary.push(`「${sh.name}」未识别班级（表名需为班级名）`); return; }
+      const { items } = ExcelImport.mapSheet(sh.rows, schema, { name: 0, score: 1 });
+      df[cls] = df[cls] || [];
+      let ok = 0, bad = 0;
+      items.forEach(it => {
+        const name = String(it.name || "").trim();
+        const score = parseFloat(it.score);
+        if (!name || /^(姓名|学生|名字|name)$/i.test(name) || isNaN(score) || score < 0 || score > 100) { bad++; return; }
+        let p = df[cls].find(x => x.name === name);
+        if (!p) { p = { name, hist: [] }; df[cls].push(p); }
+        p.hist.push(Math.round(score * 10) / 10);
+        ok++;
+      });
+      summary.push(`${cls}：${ok} 人${bad ? `（忽略 ${bad} 行）` : ""}`);
+    });
+    Store.set("daofaScores", df);
+    toast("✅ Excel 导入完成：" + summary.join("；"));
+    gaRefresh();
+  };
   if (btn("ga-df-report")) btn("ga-df-report").onclick = () => {
     const cards = Array.from(root.querySelectorAll(".card")).map(c => c.innerHTML).join("<hr style='border:none;border-top:1px dashed #B7CEC0;margin:18px 0'>");
     if (!gaDaofa() || !Object.keys(gaDaofa()).length) { toast("暂无道法成绩数据"); return; }
-    gaOpenReport("道法学科 · 所教5个班成绩分析报告", cards);
+    gaOpenReport("道法学科 · 所教班级成绩分析报告", cards);
   };
 }

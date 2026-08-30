@@ -173,16 +173,39 @@ function defaultScoreCols() {
   return ["卫生", "作业", "课堂", "纪律"];
 }
 
-/* 默认班级（作业提效） */
+/* 默认班级（1班为班主任班，另任课 2班、3班、创新班） */
 function defaultClasses() {
   return [
-    { id: "c1", name: "701班", isHome: true },
-    { id: "c2", name: "702班", isHome: false },
-    { id: "c3", name: "703班", isHome: false },
-    { id: "c4", name: "704班", isHome: false },
-    { id: "c5", name: "705班", isHome: false }
+    { id: "c1", name: "1班", isHome: true },
+    { id: "c2", name: "2班", isHome: false },
+    { id: "c3", name: "3班", isHome: false },
+    { id: "c4", name: "创新班", isHome: false }
   ];
 }
+
+/* 老默认班级（701~705班）→ 新四班 一次性迁移（幂等，已迁移过则跳过） */
+(function migrateClassesToFour() {
+  try {
+    const OLD = ["701班", "702班", "703班", "704班", "705班"];
+    const MAP = { "701班": "1班", "702班": "2班", "703班": "3班" };
+    const cur = Store.get("classes", null);
+    if (!cur || cur.some(c => c.name === "创新班")) return;   // 已是新配置
+    const isOldDefault = cur.length === 5 && cur.every((c, i) => c.name === OLD[i] && c.id === "c" + (i + 1));
+    if (!isOldDefault) return;                                 // 用户自己改过班级，不越权修改
+    const students = Store.get("students", {});
+    const daofa = Store.get("daofaScores", {});
+    let touched = false;
+    Object.entries(MAP).forEach(([o, n]) => {
+      if (students[o] && students[o].length) { students[n] = students[o]; delete students[o]; touched = true; }
+      if (daofa[o] && daofa[o].length) { daofa[n] = daofa[o]; delete daofa[o]; touched = true; }
+    });
+    /* 704/705 若已有学生数据，班级保留并排在后面，数据不丢 */
+    const keep = ["704班", "705班"].filter(n => (students[n] || []).length);
+    const classes = defaultClasses().concat(keep.map((n, i) => ({ id: "cx" + i, name: n, isHome: false })));
+    Store.set("classes", classes);
+    if (touched) { Store.set("students", students); Store.set("daofaScores", daofa); }
+  } catch (e) { console.warn("[migrate] 班级迁移跳过:", e.message); }
+})();
 
 /* 默认小猫 */
 function defaultCat() {
@@ -635,3 +658,231 @@ function defaultMeetingThemes() {
       ] }
   ];
 }
+
+/* =========================================================
+   Excel 导入工具（零外部依赖）
+   - .xlsx：浏览器原生 DecompressionStream 解压 zip，正则解析 sheet XML
+   - .csv：直接解析（支持引号包裹字段）
+   - 自动识别表头行（姓名/性别/语文…），列顺序不限
+   ========================================================= */
+const ExcelImport = (() => {
+
+  /* ---------- zip 解包（仅取需要的文件） ---------- */
+  async function unzip(buf) {
+    const u8 = new Uint8Array(buf);
+    const dv = new DataView(buf);
+    let eocd = -1;
+    for (let i = u8.length - 22; i >= Math.max(0, u8.length - 66000); i--) {
+      if (u8[i] === 0x50 && u8[i + 1] === 0x4b && u8[i + 2] === 0x05 && u8[i + 3] === 0x06) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error("不是有效的 xlsx 文件");
+    const count = dv.getUint16(eocd + 10, true);
+    let p = dv.getUint32(eocd + 16, true);
+    const td = new TextDecoder();
+    const files = {};
+    for (let i = 0; i < count && p + 46 <= u8.length; i++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) break;
+      const method = dv.getUint16(p + 10, true);
+      const compSize = dv.getUint32(p + 20, true);
+      const nameLen = dv.getUint16(p + 28, true);
+      const extraLen = dv.getUint16(p + 30, true);
+      const cmtLen = dv.getUint16(p + 32, true);
+      const lho = dv.getUint32(p + 42, true);
+      const name = td.decode(u8.subarray(p + 46, p + 46 + nameLen));
+      if (!name.endsWith("/") && lho + 30 <= u8.length) {
+        const nl = dv.getUint16(lho + 26, true);
+        const el = dv.getUint16(lho + 28, true);
+        const start = lho + 30 + nl + el;
+        const data = u8.subarray(start, start + compSize);
+        try {
+          if (method === 0) files[name] = data;
+          else if (method === 8) {
+            const ds = new DecompressionStream("deflate-raw");
+            const stream = new Blob([data]).stream().pipeThrough(ds);
+            files[name] = new Uint8Array(await new Response(stream).arrayBuffer());
+          }
+        } catch (e) { /* 单个文件解压失败不影响其他 */ }
+      }
+      p += 46 + nameLen + extraLen + cmtLen;
+    }
+    return files;
+  }
+
+  /* ---------- XML 小工具（浏览器/node 通用，不用 DOMParser） ---------- */
+  function entity(s) {
+    return String(s)
+      .replace(/&#x([0-9a-fA-F]+);/g, (m, h) => String.fromCodePoint(parseInt(h, 16)))
+      .replace(/&#(\d+);/g, (m, d) => String.fromCodePoint(+d))
+      .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+  }
+  function attrOf(tag, name) {
+    const m = tag.match(new RegExp(name + '="([^"]*)"'));
+    return m ? m[1] : null;
+  }
+  function colIdx(ref) {
+    const m = /^([A-Z]+)/.exec(ref || "");
+    if (!m) return -1;
+    let n = 0;
+    for (const ch of m[1]) n = n * 26 + (ch.charCodeAt(0) - 64);
+    return n - 1;
+  }
+
+  /* sheet XML → 二维数组 */
+  function sheetToRows(xml, shared) {
+    const rows = [];
+    const rowTags = xml.match(/<row\b[^>]*>[\s\S]*?<\/row>/g) || [];
+    rowTags.forEach(rowTag => {
+      const cells = [];
+      const cellTags = rowTag.match(/<c\b[^>]*(?:\/>|>[\s\S]*?<\/c>)/g) || [];
+      cellTags.forEach(ctag => {
+        const ref = attrOf(ctag, "r") || "";
+        const t = attrOf(ctag, "t") || "";
+        let v = "";
+        const vm = ctag.match(/<v[^>]*>([\s\S]*?)<\/v>/);
+        if (t === "inlineStr") {
+          const ts = ctag.match(/<is>[\s\S]*?<\/is>/);
+          v = ts ? (ts[0].match(/<t[^>]*>([\s\S]*?)<\/t>/g) || []).map(x => x.replace(/<[^>]*>/g, "")).join("") : "";
+        } else if (vm) {
+          v = t === "s" ? (shared[+vm[1]] ?? "") : entity(vm[1]);
+        }
+        const ci = colIdx(ref);
+        if (ci >= 0) cells[ci] = v;
+        else cells.push(v);
+      });
+      /* 去掉行尾空串 */
+      while (cells.length && (cells[cells.length - 1] === "" || cells[cells.length - 1] == null)) cells.pop();
+      if (cells.length) rows.push(cells.map(c => (c == null ? "" : String(c).trim())));
+    });
+    return rows;
+  }
+
+  /* ---------- 解析 xlsx → [{name: 工作表名, rows: 二维数组}] ---------- */
+  async function parseXlsx(buf) {
+    const files = await unzip(buf);
+    const td = new TextDecoder();
+    const txt = n => (files[n] ? td.decode(files[n]) : "");
+    const ssXml = txt("xl/sharedStrings.xml");
+    const shared = [];
+    if (ssXml) {
+      (ssXml.match(/<si>[\s\S]*?<\/si>/g) || []).forEach(si => {
+        const s = (si.match(/<t[^>]*>([\s\S]*?)<\/t>/g) || []).map(x => entity(x.replace(/<[^>]*>/g, ""))).join("");
+        shared.push(s);
+      });
+    }
+    const wb = txt("xl/workbook.xml");
+    const rels = txt("xl/_rels/workbook.xml.rels");
+    const relMap = {};
+    (rels.match(/<Relationship\b[^>]*\/?>/g) || []).forEach(tag => {
+      const id = attrOf(tag, "Id"), target = attrOf(tag, "Target");
+      if (id && target) relMap[id] = target.replace(/^\//, "").replace(/^xl\//, "");
+    });
+    const sheets = [];
+    (wb.match(/<sheet\b[^>]*\/?>/g) || []).forEach(tag => {
+      const name = entity(attrOf(tag, "name") || "");
+      const rid = attrOf(tag, "r:id") || attrOf(tag, "id");
+      let target = rid ? relMap[rid] : null;
+      if (!target) return;
+      const path = target.startsWith("xl/") ? target : "xl/" + target;
+      const xml = txt(path);
+      if (xml) sheets.push({ name, rows: sheetToRows(xml, shared) });
+    });
+    if (!sheets.length) throw new Error("Excel 里没有找到工作表");
+    return sheets;
+  }
+
+  /* ---------- CSV 解析（支持引号包裹、Tab 分隔） ---------- */
+  function parseCSV(text) {
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    const sep = (text.split("\t").length - 1) > (text.split(",").length - 1) ? "\t" : ",";
+    const rows = []; let row = []; let cur = ""; let q = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) {
+        if (ch === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+        else cur += ch;
+      } else if (ch === '"') q = true;
+      else if (ch === sep) { row.push(cur); cur = ""; }
+      else if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && text[i + 1] === "\n") i++;
+        row.push(cur); cur = ""; rows.push(row); row = [];
+      } else cur += ch;
+    }
+    if (cur !== "" || row.length) { row.push(cur); rows.push(row); }
+    return rows.map(r => r.map(c => c.trim())).filter(r => r.some(c => c !== ""));
+  }
+
+  /* ---------- 表头识别 + 列映射 ---------- */
+  function normH(v) { return String(v || "").replace(/[\s（）()：:·]/g, ""); }
+  function mapSheet(rows, schema, positional) {
+    rows = (rows || []).filter(r => r && r.some(c => c !== ""));
+    if (!rows.length) return { header: false, items: [] };
+    let hIdx = -1, map = null, best = 0;
+    for (let i = 0; i < Math.min(2, rows.length); i++) {
+      const m = {}; let hits = 0;
+      rows[i].forEach((cell, ci) => {
+        const h = normH(cell);
+        schema.forEach(sc => { if (m[sc.key] == null && sc.alias.some(a => normH(a) === h)) { m[sc.key] = ci; hits++; } });
+      });
+      if (hits > best) { best = hits; hIdx = i; map = m; }
+    }
+    const useHeader = best >= 2; /* 至少命中 2 个已知表头才当作表头行 */
+    const items = [];
+    for (let i = useHeader ? hIdx + 1 : 0; i < rows.length; i++) {
+      const r = rows[i];
+      const it = {};
+      if (useHeader) Object.entries(map).forEach(([k, ci]) => { const v = r[ci]; if (v != null && v !== "") it[k] = v; });
+      else if (positional) Object.entries(positional).forEach(([k, ci]) => { const v = r[ci]; if (v != null && v !== "") it[k] = v; });
+      else it.name = r[0];
+      items.push(it);
+    }
+    return { header: useHeader, items };
+  }
+
+  /* ---------- Excel 日期序列 → yyyy-mm-dd ---------- */
+  function toDate(v) {
+    if (v == null || v === "") return null;
+    if (/^\d+(\.\d+)?$/.test(String(v).trim())) {
+      const n = +v;
+      if (n > 20000 && n < 60000) {
+        const d = new Date(Date.UTC(1899, 11, 30) + Math.round(n) * 86400000);
+        return d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0") + "-" + String(d.getUTCDate()).padStart(2, "0");
+      }
+      return null;
+    }
+    const s = String(v).trim().replace(/[.\/年]/g, "-").replace(/月/g, "-").replace(/日/g, "").replace(/-+$/, "");
+    const m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (m) return m[1] + "-" + String(+m[2]).padStart(2, "0") + "-" + String(+m[3]).padStart(2, "0");
+    return null;
+  }
+
+  /* ---------- 选择文件并解析（返回 sheets 或 null） ---------- */
+  function pickFile() {
+    return new Promise(resolve => {
+      const inp = document.createElement("input");
+      inp.type = "file";
+      inp.accept = ".xlsx,.csv,.xls";
+      inp.onchange = async () => {
+        if (!inp.files || !inp.files[0]) return resolve(null);
+        const f = inp.files[0];
+        try {
+          if (/\.xls$/i.test(f.name) && !/\.xlsx$/i.test(f.name)) {
+            const head = new Uint8Array(await f.slice(0, 8).arrayBuffer());
+            const isZip = head[0] === 0x50 && head[1] === 0x4b;
+            if (!isZip) { alert("暂不支持旧版 .xls 文件。请在 Excel 里打开后「另存为」.xlsx 或 .csv，再导入。"); return resolve(null); }
+          }
+          if (/\.csv$/i.test(f.name)) {
+            const rows = parseCSV(await f.text());
+            if (!rows.length) { alert("文件里没有数据"); return resolve(null); }
+            resolve([{ name: f.name.replace(/\.[^.]+$/, ""), rows }]);
+          } else {
+            resolve(await parseXlsx(await f.arrayBuffer()));
+          }
+        } catch (e) { alert("读取失败：" + (e.message || e)); resolve(null); }
+      };
+      inp.click();
+    });
+  }
+
+  return { pickFile, parseCSV, parseXlsx, mapSheet, toDate };
+})();

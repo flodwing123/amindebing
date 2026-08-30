@@ -97,7 +97,7 @@ const TASK_SUB = {
 const TASK_TIP = {
   daily: "今日待办 · 首页看板",
   student: "花名册 · 个人档案 · 导入导出 · 报告 · 排名",
-  grade: "班主任三科分析 · 道法5班成绩 · 趋势 · 进退步",
+  grade: "班主任三科分析 · 道法各班成绩 · 趋势 · 进退步",
   discipline: "违纪记录 · 统计 · 导出",
   homework: "作业登记 · 统计看板 · 背书默写 · 金句",
   leave: "请假登记 · 统计 · 导出Excel",
