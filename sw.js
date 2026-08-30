@@ -1,6 +1,6 @@
 /* 啊敏的兵 · Service Worker
    策略：网络优先，失败回退缓存 —— 保证每次更新及时生效，离线也能用 */
-const CACHE = "amindebing-v10";
+const CACHE = "amindebing-v11";
 const STATIC = [
   "./",
   "./index.html",
