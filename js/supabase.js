@@ -10,6 +10,43 @@ const SB = (() => {
   const TOKEN_KEY = "sb_auth";          // 登录态持久化 key
   const TIMEOUT = 20000;                // 请求超时（毫秒）
 
+  /* ---------- 云端连通状态（离线降级用） ---------- */
+  let _offline = false;
+  const _offlineListeners = [];
+  function markOffline(err) {
+    const changed = !_offline;
+    _offline = true;
+    if (changed) _offlineListeners.forEach(fn => { try { fn(false, err); } catch (e) {} });
+  }
+  function markOnline() {
+    const changed = _offline;
+    _offline = false;
+    if (changed) _offlineListeners.forEach(fn => { try { fn(true, null); } catch (e) {} });
+  }
+  function isOffline() { return _offline; }
+  function onOfflineChange(fn) { if (typeof fn === "function") _offlineListeners.push(fn); }
+
+  /* 轻量连通性探测：只查公开端点，不消耗配额，5 秒超时 */
+  async function ping(timeout = 5000) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeout);
+    try {
+      const res = await fetch(SB_CONFIG.projectUrl.replace(/\/$/, "") + "/auth/v1/settings", {
+        method: "GET",
+        headers: { apikey: SB_CONFIG.publishableKey, "Content-Type": "application/json" },
+        signal: ctrl.signal
+      });
+      clearTimeout(timer);
+      if (res.ok) { markOnline(); return true; }
+      markOffline(new Error("HTTP " + res.status));
+      return false;
+    } catch (e) {
+      clearTimeout(timer);
+      markOffline(e);
+      return false;
+    }
+  }
+
   /* ---------- 基础请求（超时 + 401 自动续期重试） ---------- */
   let refreshing = null;                // 防止并发刷新 token
 
@@ -40,11 +77,20 @@ const SB = (() => {
       });
     } catch (e) {
       clearTimeout(timer);
-      const err = new Error("网络错误或请求超时: " + e.message);
-      err.name = "SBTimeout";
+      const aborted = e && e.name === "AbortError";
+      const err = new Error(
+        aborted
+          ? "连接云端超时（20 秒无响应），已切换离线模式"
+          : "无法连接云端服务器（网络受阻或服务器已下线），已切换离线模式"
+      );
+      err.name = "SBOffline";
+      err.offline = true;
+      err.raw = e && e.message;
+      markOffline(err);
       throw err;
     }
     clearTimeout(timer);
+    markOnline();
 
     // 401：用 refresh_token 续期一次后重试
     if (res.status === 401 && !retried) {
@@ -228,6 +274,7 @@ const SB = (() => {
   return {
     TOKEN_KEY, TIMEOUT,
     request, getSession, saveSession, refreshSession, ensureSession,
-    signUp, signIn, signOut, from, isSyncKey, cloudKey, localKey
+    signUp, signIn, signOut, from, isSyncKey, cloudKey, localKey,
+    ping, isOffline, onOfflineChange
   };
 })();
