@@ -107,6 +107,13 @@ function renderGaInput() {
   const classes = gaClasses();
   const stus = gaStudentsOf(cls);
   const exams = gaExams().filter(e => e.cls === cls);
+  // 最近一次考试（date 最新）——录入表格预填其成绩
+  const latestExam = exams.slice().sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))[0];
+  const latestScores = latestExam ? (latestExam.scores || {}) : {};
+  const subjOf = (name, k) => {
+    const r = latestScores[name];
+    return r && r[k] != null ? r[k] : "";
+  };
   return `
   <div class="card">
     <div class="card-title">📝 各科成绩录入
@@ -118,29 +125,54 @@ function renderGaInput() {
       <select class="sel" id="gaInCls" style="width:110px">${classes.map(c => `<option value="${esc(c.name)}" ${c.name === cls ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>
       <input class="inp" id="gaExamName" placeholder="考试名称（如：期中考试）" style="width:170px">
       <input class="inp" type="date" id="gaExamDate" value="${Today.now()}" style="width:140px">
+      <button class="btn btn-ghost btn-sm" data-act="ga-exam-clear">🧹 清空</button>
     </div>
+    ${latestExam ? `<div style="font-size:12px;color:var(--green-600);margin-bottom:8px">📌 当前显示最近一次考试「${esc(latestExam.name)}（${esc(latestExam.date)}）」的成绩，可直接修改后保存，或点「清空」重新录入。</div>` : ""}
     ${stus.length === 0 ? `<div class="empty"><span class="e-ico">📋</span>${esc(cls)} 暂无学生名单，请先在「学生信息」模块导入花名册</div>` : `
     <div class="tbl-wrap"><table class="tbl" id="gaInputBody">
       <tr><th class="num">#</th><th>姓名</th><th>语文</th><th>数学</th><th>英语</th></tr>
       ${stus.map((s, i) => `<tr>
         <td class="num">${i + 1}</td><td>${esc(s.name)}</td>
-        <td><input class="inp" type="number" min="0" max="100" data-sname="${esc(s.name)}" data-subj="chinese" style="width:76px;padding:4px 8px"></td>
-        <td><input class="inp" type="number" min="0" max="100" data-sname="${esc(s.name)}" data-subj="math" style="width:76px;padding:4px 8px"></td>
-        <td><input class="inp" type="number" min="0" max="100" data-sname="${esc(s.name)}" data-subj="english" style="width:76px;padding:4px 8px"></td>
+        <td><input class="inp" type="number" min="0" max="100" data-sname="${esc(s.name)}" data-subj="chinese" value="${subjOf(s.name, "chinese")}" style="width:76px;padding:4px 8px"></td>
+        <td><input class="inp" type="number" min="0" max="100" data-sname="${esc(s.name)}" data-subj="math" value="${subjOf(s.name, "math")}" style="width:76px;padding:4px 8px"></td>
+        <td><input class="inp" type="number" min="0" max="100" data-sname="${esc(s.name)}" data-subj="english" value="${subjOf(s.name, "english")}" style="width:76px;padding:4px 8px"></td>
       </tr>`).join("")}
     </table></div>
     <div style="font-size:12px;color:var(--ink-light);margin-top:8px">💡 同一班级 + 同名考试会覆盖旧数据；总分自动计算；留空表示该科缺考（不计入统计）。</div>`}
   </div>
   <div class="card">
-    <div class="card-title">🗂️ ${esc(cls)} 已录入考试（${exams.length} 次）</div>
+    <div class="card-title">🗂️ ${esc(cls)} 已录入考试（${exams.length} 次）<span class="sub">点「查看」浏览该次成绩表格</span></div>
     ${exams.length === 0 ? `<div class="empty"><span class="e-ico">📭</span>暂无考试数据</div>` : `
     <div class="tbl-wrap"><table class="tbl">
       <tr><th>考试名称</th><th>日期</th><th>录入人数</th><th>操作</th></tr>
       ${exams.map(e => `<tr><td>${esc(e.name)}</td><td>${esc(e.date)}</td>
         <td class="num">${Object.keys(e.scores || {}).length}</td>
-        <td><button class="btn btn-ghost btn-sm" data-act="ga-exam-del" data-id="${e.id}">🗑️ 删除</button></td></tr>`).join("")}
+        <td style="display:flex;gap:4px">
+          <button class="btn btn-ghost btn-sm" data-act="ga-exam-view" data-id="${e.id}">👁️ 查看</button>
+          <button class="btn btn-ghost btn-sm" data-act="ga-exam-del" data-id="${e.id}">🗑️ 删除</button>
+        </td></tr>`).join("")}
     </table></div>`}
   </div>`;
+}
+/* 渲染某次考试的完整成绩表格（姓名 + 各科 + 总分） */
+function renderExamTable(exam) {
+  const scores = exam.scores || {};
+  const names = Object.keys(scores);
+  if (!names.length) return `<div class="empty"><span class="e-ico">📭</span>该考试无成绩数据</div>`;
+  const subjKeys = new Set();
+  names.forEach(n => Object.keys(scores[n]).forEach(k => { if (k !== "total") subjKeys.add(k); }));
+  const order = ["chinese", "math", "english"];
+  const others = [...subjKeys].filter(k => !order.includes(k));
+  const cols = order.filter(k => subjKeys.has(k)).concat(others);
+  const colNames = { chinese: "语文", math: "数学", english: "英语" };
+  const sortedNames = names.slice().sort((a, b) => (scores[b].total || 0) - (scores[a].total || 0));
+  return `<div class="tbl-wrap" style="max-height:340px;overflow:auto"><table class="tbl" style="font-size:13px">
+    <tr><th class="num">#</th><th>姓名</th>${cols.map(k => `<th>${colNames[k] || esc(k)}</th>`).join("")}<th>总分</th></tr>
+    ${sortedNames.map((n, i) => {
+      const s = scores[n];
+      return `<tr><td class="num">${i + 1}</td><td>${esc(n)}</td>${cols.map(k => `<td>${s[k] != null ? s[k] : ""}</td>`).join("")}<td><b>${s.total != null ? s.total : ""}</b></td></tr>`;
+    }).join("")}
+  </table></div>`;
 }
 
 /* ---- A1.1 各科成绩 Excel 导入 ---- */
@@ -564,6 +596,21 @@ function gaBindBody() {
       gaRefresh();
     };
   });
+  /* 查看某次考试完整成绩表格 */
+  root.querySelectorAll("[data-act=ga-exam-view]").forEach(b => {
+    b.onclick = () => {
+      const exam = gaExamById(b.dataset.id);
+      if (!exam) return;
+      openModal(renderExamTable(exam), `${exam.cls} · ${exam.name}（${exam.date}）`);
+      const ok = document.querySelector("[data-act=modal-ok]");
+      if (ok) { ok.textContent = "关闭"; ok.onclick = () => closeModal(); }
+    };
+  });
+  /* 清空录入表格 */
+  if (btn("ga-exam-clear")) btn("ga-exam-clear").onclick = () => {
+    root.querySelectorAll("#gaInputBody input[data-sname]").forEach(inp => { inp.value = ""; });
+    toast("已清空录入表格");
+  };
 
   /* —— 单次分析 —— */
   const singleSel = document.getElementById("gaSingleSel");

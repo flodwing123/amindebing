@@ -385,6 +385,9 @@ registerModule("dashboard", {
           </div>
         </div>
 
+        <!-- 今日课程 -->
+        ${renderTodaySchedule()}
+
         <!-- 小猫 -->
         <div class="card" id="sub-cat">
           <div class="card-title">🐱 我的小猫 <span class="sub">完成任务自动成长</span></div>
@@ -527,6 +530,13 @@ registerModule("dashboard", {
       renderModule("homework", "quote");
       activeTaskId = Store.get("tasks", defaultTasks()).find(t => t.type === "homework")?.id;
       activeSubKey = "quote";
+      renderSidebar();
+    });
+    // 今日课程 → 去编辑课表
+    document.querySelector("[data-act=dash-goto-tt]")?.addEventListener("click", () => {
+      renderModule("timetable", "home");
+      activeTaskId = Store.get("tasks", defaultTasks()).find(t => t.type === "timetable")?.id;
+      activeSubKey = "home";
       renderSidebar();
     });
     // 特异体质预警卡跳转
@@ -768,6 +778,36 @@ function renderSpecialHealthAlert() {
       </div>
       ${items}
     </div>`;
+}
+/* 首页今日课程卡片（读取班主任课表当天课程） */
+function renderTodaySchedule() {
+  const sch = Store.get("classSchedule", defaultSchedule());
+  const days = sch.days || [];
+  const periods = sch.periods || [];
+  const cells = sch.cells || {};
+  const now = new Date();
+  const dow = now.getDay();
+  const dayIdx = (dow === 0 || dow === 6) ? -1 : dow - 1;
+  if (dayIdx < 0 || dayIdx >= days.length) {
+    return `<div class="card" id="sub-today-sch">
+      <div class="card-title">⏰ 今日课程</div>
+      <div class="empty"><span class="e-ico">🎉</span>今天是周末，好好休息～</div>
+    </div>`;
+  }
+  const list = periods.map((p, pi) => {
+    const val = cells[`${pi}-${dayIdx}`] || "";
+    return { time: p.start + "-" + p.end, name: p.name, course: val };
+  }).filter(x => x.course);
+  return `<div class="card" id="sub-today-sch">
+    <div class="card-title">⏰ 今日课程（${esc(days[dayIdx])}） <span class="sub">${list.length ? list.length + " 节" : "暂无安排"}</span>
+      <button class="btn btn-ghost btn-sm" data-act="dash-goto-tt">去编辑课表</button>
+    </div>
+    ${list.length ? list.map(x => `<div style="display:flex;gap:10px;padding:7px 0;border-bottom:1px dashed var(--line);font-size:13.5px">
+      <span style="color:var(--ink-light);white-space:nowrap">${esc(x.time)}</span>
+      <b style="flex:1">${esc(x.course)}</b>
+      <span style="color:var(--ink-light)">${esc(x.name)}</span>
+    </div>`).join("") : `<div class="empty"><span class="e-ico">📅</span>今天暂无课程，点「去编辑课表」设置</div>`}
+  </div>`;
 }
 /* 倒计时：距开学 / 距周末 / 距最近节假日 */
 function getCountdown() {

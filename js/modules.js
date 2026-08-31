@@ -277,18 +277,66 @@ function renderSchedule(sch, tempList) {
   html += `</tr>`;
   periods.forEach((p, pi) => {
     html += `<tr><td class="period" data-act="edit-period" data-i="${pi}" title="点击编辑时间">
-      <div>${esc(p.name)}</div><div style="font-size:10px;opacity:.85">${esc(p.start)}-${esc(p.end)}</div></td>`;
+      <div style="font-weight:700;font-size:13px">${esc(p.name)}</div><div style="font-size:10px;opacity:.85">${esc(p.start)}-${esc(p.end)}</div></td>`;
     days.forEach((d, di) => {
       const key = `${pi}-${di}`;
       const temp = temps.find(t => t.key === key);
       const val = temp ? temp.to : (cells[key] || "");
       html += `<td class="${temp ? "temp-cell temp-today" : val ? "" : "empty-cell"}" data-cell="${key}" data-pi="${pi}" data-di="${di}" title="点击编辑课程">
-        ${temp ? `<div>${esc(val)}</div><span class="tc-badge">🔁 换课</span>` : (val ? esc(val) : "＋")}</td>`;
+        ${temp ? `<div style="font-weight:700;font-size:14px">${esc(val)}</div><span class="tc-badge">🔁 换课</span>` : (val ? `<b style="font-size:14px">${esc(val)}</b>` : "＋")}</td>`;
     });
     html += `</tr>`;
   });
   html += `</table></div>`;
   return html;
+}
+/* 课程表图片参考（上传显示，对照手动填写，不自动识别） */
+function renderScheduleImg(key) {
+  const images = Store.get("scheduleImages", {});
+  const img = images[key] || "";
+  return `<div style="margin-bottom:10px">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+      <span style="font-size:12px;color:var(--ink-light)">📷 课表图片参考（上传后对照手动填写）：</span>
+      <label class="btn btn-ghost btn-sm" style="cursor:pointer">📤 上传图片
+        <input type="file" accept="image/*" style="display:none" data-act="sch-img-upload" data-key="${key}">
+      </label>
+      ${img ? `<button class="btn btn-ghost btn-sm" data-act="sch-img-del" data-key="${key}">✕ 移除</button>` : ""}
+    </div>
+    ${img ? `<img src="${img}" style="max-width:100%;max-height:320px;border-radius:8px;border:1px solid var(--line);display:block;cursor:zoom-in" data-act="sch-img-view" data-src="${img}">` : ""}
+  </div>`;
+}
+/* 课表图片上传/移除/放大事件 */
+function bindScheduleImgEvents() {
+  document.querySelectorAll("[data-act=sch-img-upload]").forEach(inp => {
+    inp.onchange = () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return;
+      const key = inp.dataset.key;
+      const rd = new FileReader();
+      rd.onload = () => {
+        compressImage(rd.result, 900, 0.72, (data) => {
+          const images = Store.get("scheduleImages", {});
+          images[key] = data;
+          Store.set("scheduleImages", images);
+          toast("✅ 课表图片已上传（对照手动填写）");
+          rerenderTt();
+        });
+      };
+      rd.readAsDataURL(f);
+    };
+  });
+  document.querySelectorAll("[data-act=sch-img-del]").forEach(btn => {
+    btn.onclick = () => {
+      const images = Store.get("scheduleImages", {});
+      delete images[btn.dataset.key];
+      Store.set("scheduleImages", images);
+      rerenderTt();
+      toast("已移除课表图片");
+    };
+  });
+  document.querySelectorAll("[data-act=sch-img-view]").forEach(img => {
+    img.onclick = () => shViewImage(img.dataset.src);
+  });
 }
 function bindScheduleEvents(key) {
   const k = key || "schedule";
@@ -529,6 +577,7 @@ function renderTtHome() {
   const temps = Store.get("tempChanges", defaultTempChanges());
   return `<div class="card">
     <div class="card-title">🏠 班主任课表 <span class="sub">本班每天上什么课 · 点击单元格直接改课，点节次可改时间</span></div>
+    ${renderScheduleImg("classSchedule")}
     <div class="timetable-wrap" data-sch-key="classSchedule">${renderSchedule(sch, temps)}</div>
     <div style="margin-top:10px;font-size:12px;color:var(--ink-light)">💡 老师临时换课会在当天单元格以 <span style="color:var(--coral);font-weight:700">🔁 换课</span> 暖色标注，日期过后自动恢复原课表。</div>
   </div>`;
@@ -540,6 +589,7 @@ function renderTtSubject() {
   const temps = Store.get("tempChanges", defaultTempChanges());
   return `<div class="card">
     <div class="card-title">📖 科任老师课表 <span class="sub">道法课分布（示例，可自行修改） · 点击单元格改课</span></div>
+    ${renderScheduleImg("subjectSchedule")}
     <div class="timetable-wrap" data-sch-key="subjectSchedule">${renderSchedule(sch, temps)}</div>
     <div style="margin-top:10px;font-size:12px;color:var(--ink-light)">💡 此课表与班主任课表相互独立，分别编辑、互不影响。</div>
   </div>`;
@@ -589,8 +639,8 @@ function renderTtTemp() {
 }
 
 function bindTtTab(tab) {
-  if (tab === "home") bindScheduleEvents("classSchedule");
-  if (tab === "subject") bindScheduleEvents("subjectSchedule");
+  if (tab === "home") { bindScheduleEvents("classSchedule"); bindScheduleImgEvents(); }
+  if (tab === "subject") { bindScheduleEvents("subjectSchedule"); bindScheduleImgEvents(); }
   if (tab === "temp") {
     document.querySelector("[data-act=temp-add]")?.addEventListener("click", () => {
       const date = document.getElementById("inpTempDate").value;
@@ -686,15 +736,14 @@ function renderShImgs(imgs, label) {
     </div>
   </div>`;
 }
-/* 渲染某学生的请假记录（同步请假登记 leaveRecords） */
+/* 渲染某学生的全部请假记录（同步请假登记 leaveRecords） */
 function renderShLeave(name) {
   const list = (Store.get("leaveRecords", []) || []).filter(r => r && r.name === name);
   if (!list.length) return "";
   const rows = list.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
-    .slice(0, 5)
-    .map(r => `<div style="font-size:12.5px;color:var(--ink-light)">📮 ${esc(r.start || "")} ~ ${esc(r.end || "")} · ${esc(r.type || "")} · ${esc(r.status || "")}</div>`)
+    .map(r => `<div style="font-size:12.5px;color:var(--ink-light)">📮 ${esc(r.start || "")} ~ ${esc(r.end || "")} · ${esc(r.type || "")} · ${esc(r.status || "")}${r.reason ? " · " + esc(r.reason) : ""}</div>`)
     .join("");
-  return `<div style="margin:6px 0;padding:8px 10px;background:#FBF7F0;border-radius:8px;font-size:12px"><b>📮 请假记录（同步考勤数据）：</b>${rows}</div>`;
+  return `<div style="margin:6px 0;padding:8px 10px;background:#FBF7F0;border-radius:8px;font-size:12px"><b>📮 请假记录（同步考勤数据 · 共 ${list.length} 条）：</b>${rows}</div>`;
 }
 function renderSpecialHealth() {
   const list = getSpecialHealth();
@@ -720,8 +769,9 @@ function renderSpecialHealth() {
   return `<div class="card">
     <div class="card-title">🚨 特异体质提醒 <span class="sub">病史 · 注意事项 · 家长说明 · 诊断证明 · 长期保存</span>
       <button class="btn btn-primary btn-sm" data-act="sh-add">＋ 新增记录</button>
+      <button class="btn btn-ghost btn-sm" data-act="sh-print">🖨️ 打印</button>
     </div>
-    <div style="font-size:12.5px;color:#C0564D;margin-bottom:12px;line-height:1.7">⚠️ 以下学生有特殊体质，请在教学、体育、活动、饮食等场景特别留意。图片与记录<b>长期保存在本机</b>，不会丢失。</div>
+    <div style="font-size:12.5px;color:#C0564D;margin-bottom:12px;line-height:1.7">⚠️ 以下学生有特殊体质，请在教学、体育、活动、饮食等场景特别留意。点击图片可放大、下载；「🖨️ 打印」可导出全部记录（图片自动放大）。</div>
     ${cards || `<div class="empty"><span class="e-ico">🍃</span>暂无记录 · 点击「＋ 新增记录」添加</div>`}
   </div>`;
 }
@@ -824,6 +874,8 @@ function renderSeatsEdit() {
     <div class="card-title">🪑 座次表
       <button class="btn btn-primary btn-sm" data-act="seat-import">📊 导入 Excel 排座</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-save">💾 保存布局</button>
+      <button class="btn btn-ghost btn-sm" data-act="seat-rotate-all">🔄 整体滚动</button>
+      <button class="btn btn-ghost btn-sm" data-act="seat-rotate-in">🔁 小组内滚动</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-download">⬇️ 下载</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-print">🖨️ 打印</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-reset">清空</button>
@@ -834,20 +886,40 @@ function renderSeatsEdit() {
       <span class="badge badge-blue" style="margin-left:4px">良好</span>
       <span class="badge badge-amber" style="margin-left:4px">中等</span>
       <span class="badge badge-red" style="margin-left:4px">待提升</span>
-      <span style="margin-left:12px">拖动学生卡片可换座</span>
+      <span style="margin-left:12px">彩色边框 = 学习小组 · 拖动卡片可换座</span>
+    </div>
+    <div style="text-align:center;margin:0 auto 10px;max-width:420px">
+      <div style="background:#F6EEDD;border:1px solid #DCC99A;border-radius:8px;padding:8px;font-size:13px;font-weight:700;color:#8A6D3B">📚 讲 台</div>
     </div>
     <div class="seat-grid" id="seatGrid" style="grid-template-columns:repeat(${cols},1fr)">
       ${order.map((s, i) => renderSeatCell(s, i)).join("")}
     </div>
+    <div style="font-size:12px;color:var(--ink-light);margin-top:10px">💡 「🔄 整体滚动」= 全班循环换到下一个位置（小组保持相邻）；「🔁 小组内滚动」= 每个小组内部组员循环换座。</div>
   </div>`;
   return html;
+}
+/* 学习小组 → 颜色（稳定映射） */
+function groupColorOf(group) {
+  if (!group) return null;
+  const palette = [
+    { bg: "#EAF3FB", border: "#4A90D9" }, { bg: "#FDF3E3", border: "#E8A23D" },
+    { bg: "#E9F7EC", border: "#4CAF7D" }, { bg: "#F3EAFB", border: "#9B5DE5" },
+    { bg: "#FDECEC", border: "#E05A5A" }, { bg: "#FFF9E3", border: "#C9A227" },
+    { bg: "#EAF7F7", border: "#2FA8A8" }, { bg: "#FBEAF2", border: "#D95A9B" }
+  ];
+  let h = 0;
+  for (let i = 0; i < group.length; i++) h = (h * 31 + group.charCodeAt(i)) % 9973;
+  return palette[h % palette.length];
 }
 function renderSeatCell(s, idx) {
   const gradeClass = s.grade ? `grade-${s.grade}` : "";
   const genderClass = s.gender === "男" ? "male" : s.gender === "女" ? "female" : "";
   const gb = { A: "gb-A", B: "gb-B", C: "gb-C", D: "gb-D" }[s.grade] || "";
-  return `<div class="seat-cell ${gradeClass} ${genderClass}" draggable="true" data-idx="${idx}" data-name="${esc(s.name)}">
+  const gc = groupColorOf(s.group);
+  const groupStyle = gc ? `border:2px solid ${gc.border};background:${gc.bg}` : "";
+  return `<div class="seat-cell ${gradeClass} ${genderClass}" draggable="true" data-idx="${idx}" data-name="${esc(s.name)}" style="${groupStyle}">
     ${s.grade ? `<span class="s-grade-badge ${gb}">${s.grade}</span>` : ""}
+    ${s.group ? `<div style="font-size:9px;font-weight:700;color:${gc.border}">${esc(s.group)}</div>` : ""}
     <div class="s-name">${esc(s.name)}</div>
     <div class="s-info">${esc(s.gender || "")}${s.score != null ? " · " + s.score + "分" : ""}</div>
   </div>`;

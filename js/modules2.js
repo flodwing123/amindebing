@@ -134,11 +134,47 @@ function shRenderDraftImgs(kind) {
   });
 }
 
-/* 点击缩略图放大查看 */
+/* 点击缩略图放大查看（可下载） */
 function shViewImage(src) {
-  openModal(`<img src="${src}" style="max-width:100%;max-height:68vh;border-radius:8px;margin:0 auto;display:block">`, "查看图片");
+  openModal(`<div style="text-align:center">
+    <img src="${src}" style="max-width:100%;max-height:62vh;border-radius:8px;display:block;margin:0 auto 10px">
+    <button class="btn btn-ghost btn-sm" data-act="sh-img-download" data-src="${src}" style="margin:0 auto">⬇️ 下载图片</button>
+  </div>`, "查看图片");
   const ok = document.querySelector("[data-act=modal-ok]");
   if (ok) { ok.textContent = "关闭"; ok.onclick = () => closeModal(); }
+  const dl = document.querySelector("[data-act=sh-img-download]");
+  if (dl) dl.onclick = () => shDownloadImage(dl.dataset.src);
+}
+function shDownloadImage(src) {
+  const a = document.createElement("a");
+  a.href = src;
+  a.download = "特异体质图片_" + Date.now() + ".jpg";
+  a.click();
+  toast("已开始下载图片");
+}
+/* 打印全部特异体质记录（图片放大） */
+function shPrintSpecialHealth() {
+  const list = getSpecialHealth();
+  if (!list.length) { toast("暂无特异体质记录"); return; }
+  const items = list.map(r => {
+    const leave = (Store.get("leaveRecords", []) || []).filter(x => x && x.name === r.name);
+    const imgs = (r.parentImgs || []).concat(r.hospitalImgs || []);
+    return `
+      <div style="page-break-inside:avoid;margin-bottom:22px;border:2px solid #C0392B;border-radius:12px;padding:16px">
+        <div style="font-size:20px;font-weight:bold;color:#C0392B;margin-bottom:8px">🚨 ${esc(r.name)} <span style="font-size:14px">${esc(r.cls || "")} · ${esc(r.illness || "")}</span></div>
+        ${r.note ? `<div style="font-size:14px;margin-bottom:8px"><b>⚠️ 注意事项：</b>${esc(r.note)}</div>` : ""}
+        ${leave.length ? `<div style="font-size:13px;margin-bottom:8px"><b>📮 请假记录（${leave.length} 条）：</b>${leave.map(l => `${esc(l.start || "")}~${esc(l.end || "")} ${esc(l.type || "")} ${esc(l.status || "")}`).join("；")}</div>` : ""}
+        ${imgs.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${imgs.map(s => `<img src="${s}" style="width:230px;height:auto;border-radius:8px;border:1px solid #ddd">`).join("")}</div>` : ""}
+      </div>`;
+  }).join("");
+  const w = window.open("", "_blank");
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>特异体质提醒打印</title>
+  <style>body{font-family:"Microsoft YaHei",sans-serif;max-width:760px;margin:20px auto;padding:20px;color:#333}h1{color:#C0392B;border-bottom:3px solid #C0392B;padding-bottom:10px}img{max-width:100%}@media print{body{margin:0}}</style></head><body>
+  <h1>🚨 特异体质学生提醒清单</h1>
+  <p style="color:#666">共 ${list.length} 名学生 · 打印日期 ${Today.now()}</p>
+  ${items}
+  <script>window.print()</script></body></html>`);
+  w.document.close();
 }
 
 /* =========================================================
@@ -196,6 +232,7 @@ function bindTabActions(tab) {
   /* ---- 特异体质提醒 ---- */
   if (tab === "special-health") {
     document.querySelector("[data-act=sh-add]")?.addEventListener("click", () => shOpenForm(null));
+    document.querySelector("[data-act=sh-print]")?.addEventListener("click", () => shPrintSpecialHealth());
     document.querySelectorAll("[data-act=sh-edit]").forEach(btn => {
       btn.onclick = () => {
         const r = getSpecialHealth().find(x => x.id === btn.dataset.id);
@@ -479,16 +516,21 @@ function bindSeatEvents() {
   document.querySelector("[data-act=seat-download]")?.addEventListener("click", () => {
     const saved = Store.get("seatLayout", { order: Store.get("seats", []) });
     const cols = Store.get("seatCols", 6);
-    let txt = "第" + (grid ? 1 : 1) + "排\t";
     const rows = [];
     saved.order.forEach((s, i) => {
       if (i % cols === 0) rows.push([]);
-      rows[rows.length - 1].push(`${s.name}(${s.gender || ""}${s.score != null ? "," + s.score : ""})`);
+      rows[rows.length - 1].push(`${s.name}${s.group ? "[" + s.group + "]" : ""}(${s.gender || ""}${s.score != null ? "," + s.score : ""})`);
     });
     const lines = rows.map((r, ri) => `第${ri + 1}排：` + r.join("　"));
-    downloadFile("座次表.txt", "【座次表】\n" + lines.join("\n"));
-    toast("已下载座次表");
+    const csv = ["姓名,性别,学习小组,成绩,座位"];
+    saved.order.forEach((s, i) => {
+      csv.push([s.name, s.gender || "", s.group || "", s.score != null ? s.score : "", "第" + (Math.floor(i / cols) + 1) + "排第" + (i % cols + 1) + "列"].join(","));
+    });
+    downloadFile("座次表.csv", "\ufeff【座次表】\n" + lines.join("\n") + "\n\n" + csv.join("\n"), "text/csv;charset=utf-8");
+    toast("已下载座次表（含 CSV 明细）");
   });
+  document.querySelector("[data-act=seat-rotate-all]")?.addEventListener("click", () => seatRotate("all"));
+  document.querySelector("[data-act=seat-rotate-in]")?.addEventListener("click", () => seatRotate("in"));
   document.querySelector("[data-act=seat-reset]")?.addEventListener("click", () => {
     if (confirm("确定清空座次表吗？")) {
       Store.del("seatLayout");
@@ -692,6 +734,30 @@ function seatApplyImport() {
   if (body) { body.innerHTML = renderSeatsEdit(); bindSeatEvents(); }
   const label = seatStrategy === "group" ? "学习小组" : seatStrategy === "gender" ? "男女搭配" : "成绩";
   toast("✅ 已按" + label + "排座，可拖动微调");
+}
+/* 座位滚动：mode="all" 小组整体循环 / "in" 小组内部组员循环 */
+function seatRotate(mode) {
+  const saved = Store.get("seatLayout", { order: Store.get("seats", []) });
+  const order = saved.order || [];
+  if (!order.length) { toast("暂无座位数据"); return; }
+  // 按小组分组（保持相邻顺序）
+  const groups = [];
+  let last = null;
+  order.forEach(s => {
+    const g = s.group || "未分组";
+    if (g !== last) { groups.push([]); last = g; }
+    groups[groups.length - 1].push(s);
+  });
+  if (mode === "all") {
+    if (groups.length > 1) groups.push(groups.shift()); // 小组整体循环：第一个小组移到末尾
+  } else {
+    groups.forEach(g => { if (g.length > 1) g.push(g.shift()); }); // 每组组员循环换座
+  }
+  saved.order = groups.flat();
+  Store.set("seatLayout", saved);
+  const body = document.getElementById("classTabBody");
+  if (body) { body.innerHTML = renderSeatsEdit(); bindSeatEvents(); }
+  toast(mode === "all" ? "🔄 已整体滚动（小组保持相邻）" : "🔁 已小组内滚动换座");
 }
 
 /* ---- AI自动排座事件 + 逻辑 ---- */
@@ -1720,12 +1786,29 @@ function renderScoreAnalysis() {
 function renderRanking() {
   const classes = Store.get("classes", defaultClasses());
   const students = Store.get("students", {});
+  const exams = Store.get("gradeExams", []);
   let html = `<div class="card">
-    <div class="card-title">🏆 个人排名 <span class="sub">按总分从高到低</span></div>`;
+    <div class="card-title">🏆 个人排名 <span class="sub">按最近一次考试成绩总分排名</span></div>`;
   classes.forEach(c => {
-    const list = (students[c.name] || []).filter(s => s.total != null).sort((a, b) => b.total - a.total);
+    // 取该班最近一次考试（date 最新）
+    const clsExams = exams.filter(e => e.cls === c.name).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    const latest = clsExams[0];
+    let list = [], examName = "";
+    if (latest) {
+      examName = `${latest.name}（${latest.date}）`;
+      const sc = latest.scores || {};
+      list = Object.keys(sc).map(name => {
+        const s = sc[name];
+        const stu = (students[c.name] || []).find(x => x.name === name);
+        return { name, gender: stu ? stu.gender : "", chinese: s.chinese, math: s.math, english: s.english, total: s.total };
+      }).filter(s => s.total != null).sort((a, b) => b.total - a.total);
+    } else {
+      // 无考试数据时回退到花名册静态成绩
+      list = (students[c.name] || []).filter(s => s.total != null).sort((a, b) => b.total - a.total);
+    }
     if (!list.length) { html += `<div class="empty">${esc(c.name)}暂无成绩数据</div>`; return; }
-    html += `<div class="tbl-wrap" style="margin-bottom:12px"><table class="tbl"><tr><th class="num" style="width:50px">名次</th><th>姓名</th><th>性别</th><th>语文</th><th>数学</th><th>英语</th><th>总分</th></tr>`;
+    html += `<h3 style="margin:10px 0 8px;color:var(--green-700)">${esc(c.name)}${examName ? ' <span style="font-size:12px;color:var(--ink-light)">· ' + esc(examName) + "</span>" : ""}</h3>`;
+    html += `<div class="tbl-wrap" style="margin-bottom:14px"><table class="tbl"><tr><th class="num" style="width:50px">名次</th><th>姓名</th><th>性别</th><th>语文</th><th>数学</th><th>英语</th><th>总分</th></tr>`;
     list.forEach((s, i) => {
       const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : "";
       html += `<tr><td class="num"><b>${medal} ${i + 1}</b></td><td>${esc(s.name)}</td>
@@ -1955,6 +2038,20 @@ function bindStuTab(tab) {
       </div>`, "🎂 本月生日（" + ym + "）");
       const ok = document.querySelector("[data-act=modal-ok]");
       if (ok) ok.onclick = closeModal;
+    });
+  }
+  if (tab === "profile") {
+    document.querySelector("[data-act=prof-xl]")?.addEventListener("click", () => {
+      const cls = (document.getElementById("profCls") || {}).value;
+      profileImportExcel(cls);
+    });
+    const profClsSel = document.getElementById("profCls");
+    if (profClsSel) profClsSel.onchange = () => {
+      const body = document.getElementById("profBody");
+      if (body) body.innerHTML = renderProfileTable(profClsSel.value);
+    };
+    document.querySelectorAll("[data-act=prof-view]").forEach(btn => {
+      btn.onclick = () => showStuProfile(btn.dataset.cls, btn.dataset.name);
     });
   }
   if (tab === "io") {
@@ -2454,6 +2551,7 @@ registerModule("honor", {
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
         <button class="btn btn-sm btn-ghost" data-act="honor-filter" data-t="all">全部</button>
         <button class="btn btn-sm btn-ghost" data-act="honor-filter" data-t="student">👧 学生获奖</button>
+        <button class="btn btn-sm btn-ghost" data-act="honor-filter" data-t="class">🏅 班级荣誉</button>
         <button class="btn btn-sm btn-ghost" data-act="honor-filter" data-t="teacher">🧑‍🏫 教师荣誉</button>
       </div>
       <div style="font-size:12px;color:var(--ink-light);margin-bottom:10px">💡 添加荣誉后，可在卡片上「📷 加照片」上传奖状/领奖照片，长按手账可下载整理。</div>
@@ -2473,7 +2571,7 @@ registerModule("honor", {
                 <button class="sc-dl" data-act="scrap-dl" data-id="${esc(h.id)}">⬇️ 下载</button>
               </div>
               <div class="sc-img-body">` : ""}
-              <div class="sc-date">${esc(h.date)} · ${h.type === "teacher" ? "教师荣誉" : "学生获奖"}</div>
+              <div class="sc-date">${esc(h.date)} · ${h.type === "teacher" ? "教师荣誉" : h.type === "class" ? "班级荣誉" : "学生获奖"}</div>
               <div class="sc-title">${esc(h.title)}</div>
               <div class="sc-desc">${esc(h.desc)}</div>
               ${img ? `<button class="btn btn-ghost btn-sm" data-act="honor-img" data-id="${esc(h.id)}" style="margin-top:8px;width:100%">📷 更换照片</button>`
@@ -2490,6 +2588,7 @@ registerModule("honor", {
       openModal(`
         <select class="inp" id="inpHonorType" style="margin-bottom:8px">
           <option value="student">🌟 学生获奖</option>
+          <option value="class">🏅 班级荣誉</option>
           <option value="teacher">🏆 教师荣誉</option>
         </select>
         <input class="inp" id="inpHonorTitle" placeholder="荣誉名称（如：市三好学生）" style="margin-bottom:8px">
@@ -2528,7 +2627,7 @@ registerModule("honor", {
         const desc = document.getElementById("inpHonorDesc").value.trim();
         if (!title) { toast("请输入荣誉名称"); return; }
         const honors = Store.get("honors", []);
-        const rec = { id: uid(), type, title: type === "teacher" ? title : `${name}·${title}`, name, desc: desc || `${name} 荣获「${title}」`, date };
+        const rec = { id: uid(), type, title: (type === "teacher" || type === "class") ? title : `${name}·${title}`, name, desc: desc || (type === "class" ? title : `${name} 荣获「${title}」`), date };
         honors.push(rec);
         Store.set("honors", honors);
         if (honorImg) {
@@ -2616,15 +2715,75 @@ function refreshHonor() {
 function renderStuProfile() {
   const classes = Store.get("classes", defaultClasses());
   const students = Store.get("students", {});
-  const clsSelect = classes.map(c => `<option value="${esc(c.name)}">${esc(c.name)}${c.isHome ? "（班主任班）" : ""}</option>`).join("");
+  const homeCls = classes[0].name;
+  const clsSelect = classes.map(c => `<option value="${esc(c.name)}" ${c.name === homeCls ? "selected" : ""}>${esc(c.name)}${c.isHome ? "（班主任班）" : ""}</option>`).join("");
   return `<div class="card">
-    <div class="card-title">📁 学生个人档案 <span class="sub">查看学生详细信息</span></div>
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
-      <select class="inp" id="profCls" style="width:auto"><option value="">选择班级</option>${clsSelect}</select>
-      <select class="inp" id="profStu" style="width:auto"><option value="">选择学生</option></select>
+    <div class="card-title">📁 学生个人档案 <span class="sub">Excel 上传 · 表格浏览 · 点「查看」看详情</span>
+      <button class="btn btn-primary btn-sm" data-act="prof-xl">📊 上传 Excel</button>
     </div>
-    <div id="profBody"><div class="empty"><span class="e-ico">📁</span>请选择班级和学生查看个人档案</div></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <select class="inp" id="profCls" style="width:auto">${clsSelect}</select>
+    </div>
+    <div id="profBody">${renderProfileTable(homeCls)}</div>
   </div>`;
+}
+/* 个人档案表格（某班全部学生） */
+function renderProfileTable(cls) {
+  const students = Store.get("students", {});
+  const list = students[cls] || [];
+  if (!list.length) {
+    return `<div class="empty"><span class="e-ico">📁</span>${esc(cls)} 暂无学生档案 · 点「📊 上传 Excel」导入</div>`;
+  }
+  return `<div class="tbl-wrap"><table class="tbl">
+    <tr><th class="num">#</th><th>姓名</th><th>性别</th><th>出生年月</th><th>语文</th><th>数学</th><th>英语</th><th>总分</th><th>操作</th></tr>
+    ${list.map((s, i) => `<tr>
+      <td class="num">${i + 1}</td>
+      <td>${esc(s.name)}</td>
+      <td style="color:${s.gender === "女" ? "#C0668A" : "#3A6B9B"}">${esc(s.gender || "—")}</td>
+      <td>${s.birthday ? esc(s.birthday) : "—"}</td>
+      <td>${s.chinese ?? "—"}</td><td>${s.math ?? "—"}</td><td>${s.english ?? "—"}</td>
+      <td><b style="color:var(--green-700)">${s.total ?? "—"}</b></td>
+      <td><button class="btn btn-ghost btn-sm" data-act="prof-view" data-cls="${esc(cls)}" data-name="${esc(s.name)}">查看</button></td>
+    </tr>`).join("")}
+  </table></div>`;
+}
+/* 个人档案 Excel 导入（导入到当前选中班级） */
+async function profileImportExcel(cls) {
+  try {
+    const sheets = await ExcelImport.pickFile();
+    if (!sheets || !sheets.length) return;
+    const sh = sheets[0];
+    const schema = [
+      { key: "name", alias: ["姓名", "学生姓名", "学生", "名字"] },
+      { key: "gender", alias: ["性别"] },
+      { key: "chinese", alias: ["语文"] },
+      { key: "math", alias: ["数学"] },
+      { key: "english", alias: ["英语"] },
+      { key: "total", alias: ["总分"] },
+      { key: "birthday", alias: ["出生年月", "出生日期", "生日", "出生"] }
+    ];
+    const { items } = ExcelImport.mapSheet(sh.rows, schema, { name: 0, gender: 1, chinese: 2, math: 3, english: 4, total: 5, birthday: 6 });
+    const clean = items.filter(x => x.name && !/^(姓名|学生|名字|name)$/i.test(x.name) && !/^(合计|总计|平均|均分|平均分)$/.test(x.name));
+    if (!clean.length) { toast("未识别到学生数据"); return; }
+    const all = Store.get("students", {});
+    all[cls] = clean.map(s => {
+      const o = { name: String(s.name).trim(), gender: String(s.gender || "").trim() };
+      ["chinese", "math", "english", "total"].forEach(k => {
+        const v = String(s[k] == null ? "" : s[k]).trim();
+        if (v !== "" && !isNaN(+v)) o[k] = +v;
+      });
+      if (o.total == null && (o.chinese != null || o.math != null || o.english != null)) o.total = (o.chinese || 0) + (o.math || 0) + (o.english || 0);
+      const bd = ExcelImport.toDate(s.birthday);
+      if (bd) o.birthday = bd;
+      return o;
+    });
+    Store.set("students", all);
+    const body = document.getElementById("profBody");
+    if (body) body.innerHTML = renderProfileTable(cls);
+    toast(`✅ 已导入 ${clean.length} 名学生到 ${cls}`);
+  } catch (e) {
+    toast("导入失败：" + (e.message || e));
+  }
 }
 
 function showStuProfile(cls, name) {
@@ -2668,7 +2827,17 @@ function showStuProfile(cls, name) {
     <div class="stat-chip"><span class="sc-num">${lateAtt + absentAtt + leaveAtt}</span><span class="sc-label">考勤异常（迟到${lateAtt}/缺勤${absentAtt}/请假${leaveAtt}）</span></div>
   </div>
   ${honors.length ? `<div class="card" style="margin-top:12px"><div class="card-title">🏅 获奖记录</div><table class="tbl"><tr><th>荣誉名称</th><th>日期</th><th>详情</th></tr>${honors.map(h => `<tr><td>${esc(h.name)}</td><td>${esc(h.date || "—")}</td><td>${esc(h.detail || "—")}</td></tr>`).join("")}</table></div>` : ""}
-  <div style="margin-top:12px"><button class="btn btn-ghost btn-sm" data-act="stu-profile-report" data-name="${esc(name)}" data-cls="${esc(cls)}">📄 导出个人报告</button></div>`;
+  <div style="margin-top:12px;display:flex;gap:8px">
+    <button class="btn btn-ghost btn-sm" data-act="prof-back" data-cls="${esc(cls)}">← 返回列表</button>
+    <button class="btn btn-ghost btn-sm" data-act="stu-profile-report" data-name="${esc(name)}" data-cls="${esc(cls)}">📄 导出个人报告</button>
+  </div>`;
+  const backBtn = document.querySelector("[data-act=prof-back]");
+  if (backBtn) backBtn.onclick = () => {
+    body.innerHTML = renderProfileTable(backBtn.dataset.cls);
+    bindStuTab("profile");
+  };
+  const repBtn = document.querySelector("[data-act=stu-profile-report]");
+  if (repBtn) repBtn.onclick = () => genStuReport(repBtn.dataset.name, repBtn.dataset.cls);
 }
 
 /* 信息导入导出 */

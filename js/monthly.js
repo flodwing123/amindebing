@@ -70,13 +70,18 @@ function monthlyAggregate(y, m) {
   const fullAttendance = Object.keys(attNameSet).filter(function (nm) { return !marked[nm]; }).sort();
   const attRate = totalMarks ? Math.round((1 - (lateCnt + leaveCnt + absentCnt) / totalMarks) * 100) : 0;
 
-  /* ② 表扬（荣誉登记中学生获奖，日期落在本月） */
+  /* ② 表扬（荣誉登记中学生获奖 + 班级荣誉，日期落在本月） */
   const honors = Store.get("honors", []);
   const praiseList = [];
   const praiseAgg = {};
+  const classHonorList = [];
   (honors || []).forEach(function (h) {
     if (h.type === "teacher") return;
     if (!h.date || h.date.indexOf(prefix) !== 0) return;
+    if (h.type === "class") {
+      classHonorList.push({ title: h.title, desc: h.desc, date: h.date });
+      return;
+    }
     const nm = h.name || (h.title || "").split("·")[0] || "";
     praiseList.push({ name: nm, title: h.title, date: h.date });
     praiseAgg[nm] = (praiseAgg[nm] || 0) + 1;
@@ -107,6 +112,7 @@ function monthlyAggregate(y, m) {
     key: prefix, y: y, m: m,
     attend: { days: attDays, totalMarks, late: lateCnt, leave: leaveCnt, absent: absentCnt, rate: attRate, full: fullAttendance },
     praise: { list: praiseList, agg: praiseAgg, count: praiseList.length },
+    classHonor: { list: classHonorList, count: classHonorList.length },
     hw: { days: hwDays, unfin: unfinTotal, late: lateTotal, recite: reciteTotal, dict: dictTotal, zeroUnfinished: zeroUnfinished },
     activity: { photos: photos, count: photos.length },
     studentTotal: allNames.length
@@ -131,12 +137,17 @@ function buildMonthlyText(agg) {
   }
   L.push("");
   L.push("二、表扬与荣誉");
-  if (!agg.praise.count) {
-    L.push("本月暂未登记学生荣誉。可在「荣誉登记」补充，让家长看到孩子的闪光点。");
+  if (!agg.praise.count && !agg.classHonor.count) {
+    L.push("本月暂未登记荣誉。可在「荣誉登记」补充，让家长看到孩子和班级的闪光点。");
   } else {
-    const names = Object.keys(agg.praise.agg).map(function (nm) { return nm + (agg.praise.agg[nm] > 1 ? "×" + agg.praise.agg[nm] : ""); });
-    L.push("本月共有 " + agg.praise.count + " 条学生荣誉记录，获奖同学：" + names.join("、") + "。");
-    agg.praise.list.slice(0, 6).forEach(function (p) { L.push("· " + p.name + "：" + p.title + "（" + p.date + "）"); });
+    if (agg.praise.count) {
+      const names = Object.keys(agg.praise.agg).map(function (nm) { return nm + (agg.praise.agg[nm] > 1 ? "×" + agg.praise.agg[nm] : ""); });
+      L.push("本月共有 " + agg.praise.count + " 条学生荣誉记录，获奖同学：" + names.join("、") + "。");
+      agg.praise.list.slice(0, 6).forEach(function (p) { L.push("· " + p.name + "：" + p.title + "（" + p.date + "）"); });
+    }
+    if (agg.classHonor.count) {
+      L.push("🏅 班级荣誉 " + agg.classHonor.count + " 项：" + agg.classHonor.list.map(function (c) { return c.title; }).join("、") + "。");
+    }
   }
   L.push("");
   L.push("三、作业表现");
