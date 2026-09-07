@@ -24,7 +24,6 @@ const TASK_SUB = {
   class: [
     { key: "timetable", name: "班级课程表", ico: "⏰" },
     { key: "attendance", name: "考勤记录", ico: "📋" },
-    { key: "special-health", name: "特异体质提醒", ico: "🚨" },
     { key: "decibel", name: "早读分贝", ico: "📢" },
     { key: "bottle", name: "心愿瓶", ico: "🍯" },
     { key: "coupon", name: "奖券打印", ico: "🎟️" },
@@ -98,11 +97,11 @@ const TASK_SUB = {
 const TASK_TIP = {
   daily: "今日待办 · 首页看板",
   student: "花名册 · 个人档案 · 导入导出 · 报告 · 排名",
-  grade: "班主任三科分析 · 道法各班成绩 · 趋势 · 进退步",
+  grade: "班主任三科分析 · 道法5班成绩 · 趋势 · 进退步",
   discipline: "违纪记录 · 统计 · 导出",
   homework: "作业登记 · 统计看板 · 背书默写 · 金句",
   leave: "请假登记 · 统计 · 导出Excel",
-  class: "座位编辑/AI排座 · 考勤 · 特异体质提醒 · 班会/家长会AI备课",
+  class: "座位编辑/AI排座 · 考勤 · 班会/家长会AI备课",
   retirement: "续命倒计时 · 校历 · 四象限 · 小猫",
   timetable: "班主任/科任课表 · 临时换课",
   lesson: "备课链接一键直达",
@@ -111,7 +110,8 @@ const TASK_TIP = {
   ideas: "随手记录 · 管理妙招/随笔/论文火花",
   study: "讲座AI笔记 · 思维导图 · 核心内容",
   vault: "自动快照 · 全量备份 · 永不丢失",
-  monthly: "照片上传 · AI四板块汇总 · 家长版PPT"
+  monthly: "照片上传 · AI四板块汇总 · 家长版PPT",
+  studyGroup: "Excel/CSV 分组名册 · 多套方案 · 卡片/表格/统计"
 };
 
 /* ---------- 今日待办模块（模块0） ---------- */
@@ -145,7 +145,6 @@ registerModule("daily", {
             <input type="checkbox" data-act="todo-check" data-i="${i}" ${list[i] ? "checked" : ""} style="width:17px;height:17px;accent-color:var(--green-600)">
             <span style="${list[i] ? "text-decoration:line-through;color:#9AA8A0" : "font-weight:600"}">${esc(t.name)}</span>
           </label>
-          <button class="btn btn-ghost btn-sm" data-act="todo-edit" data-i="${i}" title="编辑">✏️</button>
           <button class="btn btn-danger btn-sm" data-act="todo-del" data-i="${i}">✕</button>
         </div>`).join("")}
       </div>
@@ -200,44 +199,19 @@ registerModule("daily", {
         renderSidebar();
       };
     });
-    document.querySelectorAll("[data-act=todo-del]").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        const i = +e.target.dataset.i;
-        const todos2 = Store.get("dailyTodos", defaultDailyTodos());
-        todos2.splice(i, 1);
-        Store.set("dailyTodos", todos2);
-        const done2 = Store.get("dailyDone", {});
-        done2[today] = done2[today] || [];
-        done2[today].splice(i, 1);
-        Store.set("dailyDone", done2);
-        const view = document.getElementById("moduleView");
-        view.innerHTML = Modules.daily.render();
-        Modules.daily.after();
-        renderSidebar();
-      });
-    });
-    document.querySelectorAll("[data-act=todo-edit]").forEach(btn => {
-      btn.addEventListener("click", (e) => {
-        const i = +e.target.dataset.i;
-        const todos2 = Store.get("dailyTodos", defaultDailyTodos());
-        const t = todos2[i];
-        if (!t) return;
-        openModal(`<input class="inp" id="inpTodoName" value="${esc(t.name)}" style="margin-bottom:8px">
-          <input class="inp" id="inpTodoIco" value="${esc(t.ico)}" placeholder="图标（emoji）" maxlength="4">`, "编辑待办事项");
-        document.querySelector("[data-act=modal-ok]").onclick = () => {
-          const name = document.getElementById("inpTodoName").value.trim();
-          if (name) {
-            t.name = name;
-            t.ico = document.getElementById("inpTodoIco").value.trim() || "✅";
-            Store.set("dailyTodos", todos2);
-          }
-          closeModal();
-          const view = document.getElementById("moduleView");
-          view.innerHTML = Modules.daily.render();
-          Modules.daily.after();
-          renderSidebar();
-        };
-      });
+    document.querySelector("[data-act=todo-del]")?.addEventListener("click", (e) => {
+      const i = +e.target.dataset.i;
+      const todos2 = Store.get("dailyTodos", defaultDailyTodos());
+      todos2.splice(i, 1);
+      Store.set("dailyTodos", todos2);
+      const done2 = Store.get("dailyDone", {});
+      done2[today] = done2[today] || [];
+      done2[today].splice(i, 1);
+      Store.set("dailyDone", done2);
+      const view = document.getElementById("moduleView");
+      view.innerHTML = Modules.daily.render();
+      Modules.daily.after();
+      renderSidebar();
     });
     document.querySelector("[data-act=todo-reset]")?.addEventListener("click", () => {
       done[today] = [];
@@ -269,6 +243,29 @@ function addCatXp(n) {
   const cat = Store.get("cat", defaultCat());
   cat.xp += n;
   Store.set("cat", cat);
+}
+
+/* 特异体质首页提醒卡片 */
+function renderHealthDashboardCard() {
+  const records = Store.get("healthRecords", []);
+  if (!records.length) return "";
+  const unsigned = records.filter(r => r.consentSigned !== "已签");
+  const byType = {};
+  records.forEach(r => {
+    const t = r.diseaseType || "其他";
+    byType[t] = (byType[t] || 0) + 1;
+  });
+  const typeChips = Object.keys(byType).map(t => {
+    const colors = { "哮喘": "#E8835A", "心脏病": "#C0564D", "癫痫": "#8B5CF6", "糖尿病": "#3A6B9B", "过敏体质": "#F6A623", "视力障碍": "#3B82F6", "听力障碍": "#10B981", "肢体残疾": "#6B7280", "心理疾病": "#EC4899", "其他": "#6B7280" };
+    return `<span style="display:inline-block;padding:2px 8px;border-radius:8px;font-size:11px;font-weight:600;color:#fff;background:${colors[t] || "#6B7280"};margin:2px">${esc(t)} ${byType[t]}</span>`;
+  }).join("");
+  return `<div class="card" style="border-left:4px solid #E8835A;margin-bottom:16px" data-act="dash-goto-health">
+    <div class="card-title">🏥 特异体质关注 <span class="sub">本班 ${records.length} 名特异体质学生</span>
+      ${unsigned.length ? `<span class="badge badge-red">⚠️ ${unsigned.length} 人知情书未签</span>` : '<span class="badge badge-green">✅ 知情书已全部签署</span>'}
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:4px;margin:6px 0">${typeChips}</div>
+    <div style="font-size:12px;color:var(--ink-light);margin-top:4px">点击查看详情 · 日常教学中请特别关注这些学生</div>
+  </div>`;
 }
 
 /* =========================================================
@@ -346,31 +343,27 @@ registerModule("dashboard", {
       </div>
     </div>
 
-    ${renderSpecialHealthAlert()}
+    ${renderHealthDashboardCard()}
 
     <div class="dash-grid">
       <div>
         <!-- 今日待办大卡（校历备注 + 每日清单） -->
         <div class="card" id="sub-todos">
-          <div class="card-title">✅ 今日待办 <span class="sub">点击打勾 · 清单项可编辑/删除</span>
+          <div class="card-title">✅ 今日待办 <span class="sub">点击打勾 · 自动喂小猫 +5XP</span>
             <button class="btn btn-primary btn-sm" data-act="todo-add">＋ 添加任务</button>
             <button class="btn btn-ghost btn-sm" data-act="todo-reset">重置</button>
           </div>
           <div id="dashTodoList">
-            ${todoList.length === 0 ? `<div class="empty"><span class="e-ico">🍃</span>今天没有待办，点「＋ 添加任务」或去校历加备注</div>` :
+            ${todoList.length === 0 ? `<div class="empty"><span class="e-ico">🍃</span>今天没有待办，去校历添加备注试试？</div>` :
             todoList.map(t => `
             <div class="dash-todo-item ${doneMap[t.id] ? "done" : ""}" data-todo-item data-i="${t.id}">
               <input type="checkbox" data-act="dash-todo-check" data-id="${t.id}" ${doneMap[t.id] ? "checked" : ""}>
               <span class="dti-ico">${esc(t.ico)}</span>
               <span class="dti-name">${esc(t.name)}</span>
               <span class="dti-src ${t.src === "note" ? "note" : "task"}">${t.src === "note" ? "📅 校历" : "📌 清单"}</span>
-              ${t.src === "task" ? `<span style="margin-left:auto;display:flex;gap:4px">
-                <button class="btn btn-ghost btn-sm" data-act="dash-todo-edit" data-id="${t.id}" title="编辑">✏️</button>
-                <button class="btn btn-danger btn-sm" data-act="dash-todo-del" data-id="${t.id}" title="删除">✕</button>
-              </span>` : ""}
             </div>`).join("")}
           </div>
-          <div style="margin-top:10px;font-size:12px;color:var(--ink-light)">💡 「校历」任务来自校历当日备注，在「早日退休 → 学校校历」中维护；「清单」任务可在此直接编辑、删除</div>
+          <div style="margin-top:10px;font-size:12px;color:var(--ink-light)">💡 「校历」任务来自校历当日备注，可在「早日退休 → 学校校历」中维护</div>
         </div>
 
         <!-- 今日金句 -->
@@ -384,9 +377,6 @@ registerModule("dashboard", {
             <span class="dq-cat">${esc(quote.cat)}</span>
           </div>
         </div>
-
-        <!-- 今日课程 -->
-        ${renderTodaySchedule()}
 
         <!-- 小猫 -->
         <div class="card" id="sub-cat">
@@ -465,43 +455,6 @@ registerModule("dashboard", {
       renderSidebar();
       toast("今日待办已重置");
     });
-    // 编辑清单项
-    document.querySelectorAll("[data-act=dash-todo-edit]").forEach(btn => {
-      btn.onclick = () => {
-        const id = btn.dataset.id;
-        const todos = Store.get("dailyTodos", defaultDailyTodos());
-        const t = todos.find(x => x.id === id);
-        if (!t) return;
-        openModal(`<input class="inp" id="inpTodoName" value="${esc(t.name)}" style="margin-bottom:8px">
-          <input class="inp" id="inpTodoIco" value="${esc(t.ico)}" placeholder="图标（emoji）" maxlength="4">`, "编辑待办事项");
-        document.querySelector("[data-act=modal-ok]").onclick = () => {
-          const name = document.getElementById("inpTodoName").value.trim();
-          if (name) {
-            t.name = name;
-            t.ico = document.getElementById("inpTodoIco").value.trim() || "✅";
-            Store.set("dailyTodos", todos);
-          }
-          closeModal();
-          const view = document.getElementById("moduleView");
-          view.innerHTML = Modules.dashboard.render();
-          Modules.dashboard.after();
-          renderSidebar();
-        };
-      };
-    });
-    // 删除清单项
-    document.querySelectorAll("[data-act=dash-todo-del]").forEach(btn => {
-      btn.onclick = () => {
-        const id = btn.dataset.id;
-        const todos = Store.get("dailyTodos", defaultDailyTodos());
-        Store.set("dailyTodos", todos.filter(x => x.id !== id));
-        const view = document.getElementById("moduleView");
-        view.innerHTML = Modules.dashboard.render();
-        Modules.dashboard.after();
-        renderSidebar();
-        toast("已删除该待办");
-      };
-    });
     document.querySelector("[data-act=dash-goto-att]")?.addEventListener("click", () => {
       renderModule("class", "attendance");
       activeTaskId = Store.get("tasks", defaultTasks()).find(t => t.type === "class")?.id;
@@ -526,27 +479,17 @@ registerModule("dashboard", {
       activeSubKey = "";
       renderSidebar();
     });
+    document.querySelector("[data-act=dash-goto-health]")?.addEventListener("click", () => {
+      renderModule("health");
+      activeTaskId = Store.get("tasks", defaultTasks()).find(t => t.type === "health")?.id;
+      activeSubKey = "";
+      renderSidebar();
+    });
     document.querySelector("[data-act=dash-goto-quote]")?.addEventListener("click", () => {
       renderModule("homework", "quote");
       activeTaskId = Store.get("tasks", defaultTasks()).find(t => t.type === "homework")?.id;
       activeSubKey = "quote";
       renderSidebar();
-    });
-    // 今日课程 → 去编辑课表
-    document.querySelector("[data-act=dash-goto-tt]")?.addEventListener("click", () => {
-      renderModule("timetable", "home");
-      activeTaskId = Store.get("tasks", defaultTasks()).find(t => t.type === "timetable")?.id;
-      activeSubKey = "home";
-      renderSidebar();
-    });
-    // 特异体质预警卡跳转
-    document.querySelectorAll("[data-act=dash-goto-sh]").forEach(el => {
-      el.onclick = () => {
-        renderModule("class", "special-health");
-        activeTaskId = Store.get("tasks", defaultTasks()).find(t => t.type === "class")?.id;
-        activeSubKey = "special-health";
-        renderSidebar();
-      };
     });
   }
 });
@@ -726,7 +669,7 @@ function renderBirthdayCard() {
       ${card}
     </div>`;
 }
-/* 考勤统计（首页 5 个数字：全班人数 / 今日出勤 / 迟到 / 请假 / 缺勤） */
+/* 考勤统计 */
 function getAttendanceStats() {
   const info = classInfo();
   let total = info.studentCount || 0;
@@ -738,76 +681,14 @@ function getAttendanceStats() {
   const att = Store.get("attendance", {});
   const rec = att[Today.now()] || {};
   let late = 0, leave = 0, absent = 0;
-  const leaveNames = new Set(); // 已计为请假的学生（姓名去重）
-  Object.keys(rec).forEach(name => {
-    const v = rec[name];
+  Object.values(rec).forEach(v => {
     if (v === "late") late++;
-    else if (v === "leave") { leave++; leaveNames.add(name); }
+    else if (v === "leave") leave++;
     else if (v === "absent") absent++;
-  });
-  // 打通「请假登记」：leaveRecords 里今天在假期的学生也计入首页请假（与考勤标记去重合并）
-  const today = Today.now();
-  (Store.get("leaveRecords", []) || []).forEach(r => {
-    if (!r || r.status === "已销假" || !r.name) return;
-    const s = r.start || "", e = r.end || "";
-    if (s <= today && today <= e && !leaveNames.has(r.name)) {
-      leave++;
-      leaveNames.add(r.name);
-    }
   });
   const present = Math.max(0, total - leave - absent);
   const rate = total ? Math.round((present / total) * 100) : 0;
   return { total, present, late, leave, absent, rate };
-}
-/* 首页特异体质红色预警卡（有记录才显示） */
-function renderSpecialHealthAlert() {
-  const list = Store.get("specialHealth", []);
-  if (!Array.isArray(list) || !list.length) return "";
-  const items = list.map(r => `
-    <div data-act="dash-goto-sh" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:9px 2px;border-bottom:1px dashed #F0C9C3;cursor:pointer">
-      <span style="font-size:15px">🚨</span>
-      <b style="color:#C0392B">${esc(r.name || "")}</b>
-      <span class="badge" style="background:#C0392B;color:#fff">${esc(r.illness || "")}</span>
-      <span style="color:var(--ink-light);font-size:12px">${esc(r.cls || "")}</span>
-      ${r.note ? `<span style="color:#C0564D;font-size:12px;flex-basis:100%">⚠️ ${esc(r.note)}</span>` : ""}
-    </div>`).join("");
-  return `
-    <div class="card" style="border:1px solid #E8A79B;background:#FDF3F1;margin-bottom:18px" id="sub-sh-alert">
-      <div class="card-title" style="color:#C0392B">🚨 特异体质提醒 <span class="sub" style="color:#C0564D">${list.length} 位学生需特别留意</span>
-        <button class="btn btn-ghost btn-sm" data-act="dash-goto-sh">查看全部</button>
-      </div>
-      ${items}
-    </div>`;
-}
-/* 首页今日课程卡片（读取班主任课表当天课程） */
-function renderTodaySchedule() {
-  const sch = Store.get("classSchedule", defaultSchedule());
-  const days = sch.days || [];
-  const periods = sch.periods || [];
-  const cells = sch.cells || {};
-  const now = new Date();
-  const dow = now.getDay();
-  const dayIdx = (dow === 0 || dow === 6) ? -1 : dow - 1;
-  if (dayIdx < 0 || dayIdx >= days.length) {
-    return `<div class="card" id="sub-today-sch">
-      <div class="card-title">⏰ 今日课程</div>
-      <div class="empty"><span class="e-ico">🎉</span>今天是周末，好好休息～</div>
-    </div>`;
-  }
-  const list = periods.map((p, pi) => {
-    const val = cells[`${pi}-${dayIdx}`] || "";
-    return { time: p.start + "-" + p.end, name: p.name, course: val };
-  }).filter(x => x.course);
-  return `<div class="card" id="sub-today-sch">
-    <div class="card-title">⏰ 今日课程（${esc(days[dayIdx])}） <span class="sub">${list.length ? list.length + " 节" : "暂无安排"}</span>
-      <button class="btn btn-ghost btn-sm" data-act="dash-goto-tt">去编辑课表</button>
-    </div>
-    ${list.length ? list.map(x => `<div style="display:flex;gap:10px;padding:7px 0;border-bottom:1px dashed var(--line);font-size:13.5px">
-      <span style="color:var(--ink-light);white-space:nowrap">${esc(x.time)}</span>
-      <b style="flex:1">${esc(x.course)}</b>
-      <span style="color:var(--ink-light)">${esc(x.name)}</span>
-    </div>`).join("") : `<div class="empty"><span class="e-ico">📅</span>今天暂无课程，点「去编辑课表」设置</div>`}
-  </div>`;
 }
 /* 倒计时：距开学 / 距周末 / 距最近节假日 */
 function getCountdown() {
@@ -907,7 +788,7 @@ function renderSidebar() {
   const count = todos.filter((_, i) => list[i]).length;
 
   // 分组：内置 vs 自定义
-  const builtinIds = ["daily", "dashboard", "student", "grade", "discipline", "homework", "leave", "class", "retirement", "timetable", "lesson", "comm", "honor", "ideas", "study", "vault", "monthly"];
+  const builtinIds = ["daily", "dashboard", "student", "grade", "discipline", "homework", "leave", "class", "retirement", "timetable", "lesson", "comm", "honor", "ideas", "study", "studyGroup", "vault", "monthly", "health"];
   const builtin = tasks.filter(t => builtinIds.includes(t.type));
   const custom = tasks.filter(t => !builtinIds.includes(t.type));
 
@@ -1318,9 +1199,9 @@ function init() {
   if (!Store.get("dailyTodos", null)) Store.set("dailyTodos", defaultDailyTodos());
   if (!Store.get("links", null)) Store.set("links", defaultLinks());
 
-  // V8 兼容：检查是否有新增模块（grade/discipline/leave），若缺失则重建内置任务顺序
+  // V8 兼容：检查是否有新增模块（grade/discipline/leave/studyGroup），若缺失则重建内置任务顺序
   let tasks = Store.get("tasks", defaultTasks());
-  const v8NewTypes = ["grade", "discipline", "leave"];
+  const v8NewTypes = ["grade", "discipline", "leave", "studyGroup"];
   const needRebuild = v8NewTypes.some(t => !tasks.some(x => x.type === t));
   if (needRebuild) {
     const defaults = defaultTasks();
