@@ -472,47 +472,116 @@ function couponEdit(idx) {
 }
 
 /* ---- 座次表事件 ---- */
+function swapSeats(i1, i2) {
+  const saved = Store.get("seatLayout", { order: Store.get("seats", []) });
+  const order = saved.order;
+  if (!order || !order[i1] || !order[i2] || i1 === i2) return;
+  [order[i1], order[i2]] = [order[i2], order[i1]];
+  saved.order = order;
+  Store.set("seatLayout", saved);
+  const body = document.getElementById("classTabBody");
+  if (body) { body.innerHTML = renderSeatsEdit(); bindSeatEvents(); }
+}
 function bindSeatEvents() {
   const body = document.getElementById("classTabBody");
   const grid = document.getElementById("seatGrid");
-  if (!grid) return;
 
-  // 拖拽
+  /* 电脑端：HTML5 拖拽换座（仅在有座位网格时） */
   let dragEl = null;
-  grid.querySelectorAll(".seat-cell").forEach(cell => {
+  if (grid) grid.querySelectorAll(".seat-cell").forEach(cell => {
     cell.addEventListener("dragstart", e => { dragEl = cell; cell.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; });
     cell.addEventListener("dragend", () => { cell.classList.remove("dragging"); dragEl = null; });
     cell.addEventListener("dragover", e => e.preventDefault());
     cell.addEventListener("drop", e => {
       e.preventDefault();
-      if (dragEl && dragEl !== cell) {
-        const saved = Store.get("seatLayout", { order: Store.get("seats", []) });
-        const order = saved.order;
-        const i1 = +dragEl.dataset.idx, i2 = +cell.dataset.idx;
-        [order[i1], order[i2]] = [order[i2], order[i1]];
-        saved.order = order;
-        Store.set("seatLayout", saved);
-        body.innerHTML = renderSeatsEdit();
-        bindSeatEvents();
-      }
+      if (dragEl && dragEl !== cell) swapSeats(+dragEl.dataset.idx, +cell.dataset.idx);
+      dragEl = null;
     });
   });
+
+  /* 手机端：长按 320ms 激活拖拽（跟手 ghost + 目标高亮，松手换座） */
+  let td = null; // touch drag state
+  function moveGhost(x, y) {
+    if (!td || !td.ghost) return;
+    td.ghost.style.left = (x - td.ghost.offsetWidth / 2) + "px";
+    td.ghost.style.top = (y - td.ghost.offsetHeight / 2) + "px";
+  }
+  function endTouchDrag() {
+    if (!td) return;
+    clearTimeout(td.timer);
+    if (td.active) {
+      td.cell.classList.remove("dragging");
+      if (td.ghost) td.ghost.remove();
+      if (td.hl) {
+        td.hl.classList.remove("drop-target");
+        swapSeats(td.idx, +td.hl.dataset.idx);
+      } else {
+        toast("松手取消，拖到目标同学卡片上即可换座");
+      }
+    }
+    td = null;
+  }
+  if (grid) grid.addEventListener("touchstart", e => {
+    if (e.touches.length !== 1) return;
+    const cell = e.target.closest ? e.target.closest(".seat-cell") : null;
+    if (!cell || !grid.contains(cell)) return;
+    const t = e.touches[0];
+    td = { cell, idx: +cell.dataset.idx, sx: t.clientX, sy: t.clientY, active: false, ghost: null, hl: null, timer: null };
+    td.timer = setTimeout(() => {
+      if (!td) return;
+      td.active = true;
+      td.cell.classList.add("dragging");
+      const g = td.cell.cloneNode(true);
+      g.classList.add("drag-ghost");
+      g.style.width = td.cell.offsetWidth + "px";
+      g.style.height = td.cell.offsetHeight + "px";
+      document.body.appendChild(g);
+      td.ghost = g;
+      moveGhost(td.sx, td.sy);
+      try { if (navigator.vibrate) navigator.vibrate(25); } catch (err) {}
+    }, 320);
+  }, { passive: true });
+  if (grid) grid.addEventListener("touchmove", e => {
+    if (!td) return;
+    const t = e.touches[0];
+    if (!td.active) {
+      // 长按未激活前就滑动 → 视为滚动页面，取消拖拽
+      if (Math.abs(t.clientX - td.sx) > 8 || Math.abs(t.clientY - td.sy) > 8) { clearTimeout(td.timer); td = null; }
+      return;
+    }
+    e.preventDefault();
+    moveGhost(t.clientX, t.clientY);
+    const el = document.elementFromPoint(t.clientX, t.clientY);
+    const target = el && el.closest ? el.closest(".seat-cell") : null;
+    if (td.hl && td.hl !== target) td.hl.classList.remove("drop-target");
+    td.hl = (target && target !== td.cell && grid.contains(target)) ? target : null;
+    if (td.hl) td.hl.classList.add("drop-target");
+  }, { passive: false });
+  if (grid) grid.addEventListener("touchend", endTouchDrag);
+  if (grid) grid.addEventListener("touchcancel", endTouchDrag);
 
   document.querySelector("[data-act=seat-import]")?.addEventListener("click", () => {
     seatImportOpen();
   });
   document.querySelector("[data-act=seat-save]")?.addEventListener("click", () => {
+    if (!grid) { toast("当前没有座位数据"); return; }
     const saved = Store.get("seatLayout", {});
+    // 优先沿用座位数据里的学生对象（保留小组/成绩/性别），避免数据丢失
+    const cur = saved.order || Store.get("seats", []);
+    const byName = {};
+    cur.forEach(s => { if (s && s.name) byName[s.name] = s; });
     const order = [];
     grid.querySelectorAll(".seat-cell").forEach(c => {
-      const name = c.dataset.name;
-      const stu = studentsOfName(name);
-      order.push(stu);
+      order.push(byName[c.dataset.name] || studentsOfName(c.dataset.name));
     });
     saved.order = order;
     Store.set("seatLayout", saved);
     toast("💾 座次布局已保存");
   });
+  document.querySelector("[data-act=seat-rotate]")?.addEventListener("click", () => seatRotate("both"));
+  document.querySelector("[data-act=seat-rotate-all]")?.addEventListener("click", () => seatRotate("all"));
+  document.querySelector("[data-act=seat-rotate-in]")?.addEventListener("click", () => seatRotate("in"));
+  document.querySelector("[data-act=seat-image]")?.addEventListener("click", () => seatExportImage());
   document.querySelector("[data-act=seat-download]")?.addEventListener("click", () => {
     const saved = Store.get("seatLayout", { order: Store.get("seats", []) });
     const cols = Store.get("seatCols", 6);
@@ -529,8 +598,6 @@ function bindSeatEvents() {
     downloadFile("座次表.csv", "\ufeff【座次表】\n" + lines.join("\n") + "\n\n" + csv.join("\n"), "text/csv;charset=utf-8");
     toast("已下载座次表（含 CSV 明细）");
   });
-  document.querySelector("[data-act=seat-rotate-all]")?.addEventListener("click", () => seatRotate("all"));
-  document.querySelector("[data-act=seat-rotate-in]")?.addEventListener("click", () => seatRotate("in"));
   document.querySelector("[data-act=seat-reset]")?.addEventListener("click", () => {
     if (confirm("确定清空座次表吗？")) {
       Store.del("seatLayout");
@@ -541,7 +608,129 @@ function bindSeatEvents() {
   });
 }
 function studentsOfName(name) {
-  return allStudents().find(s => s.name === name) || { name, gender: "", score: null, grade: "" };
+  // 优先从座位数据里找（保留小组/成绩/性别），再查学生信息库
+  const seatSrc = (Store.get("seatLayout", { order: [] }).order || []).concat(Store.get("seats", []));
+  const inSeat = seatSrc.find(s => s && s.name === name);
+  if (inSeat) return inSeat;
+  return allStudents().find(s => s.name === name) || { name, gender: "", score: null, grade: "", group: "" };
+}
+
+/* ---- 导出座位图 PNG（讲台 + 彩色小组格子 + 图例，2 倍高清） ---- */
+function seatExportImage() {
+  const saved = Store.get("seatLayout", { order: Store.get("seats", []) });
+  const order = saved.order || [];
+  if (!order.length) { toast("暂无座位数据"); return; }
+  const cols = Store.get("seatCols", 6);
+  const rows = Math.ceil(order.length / cols);
+  const cls = (Store.get("classes", defaultClasses())[0] || { name: "" }).name;
+
+  const scale = 2;
+  const cellW = 118, cellH = 74, gap = 8, pad = 26;
+  const titleH = 54, stageH = 46, legendH = 64;
+  const W = pad * 2 + cols * cellW + (cols - 1) * gap;
+  const H = titleH + stageH + 14 + rows * cellH + (rows - 1) * gap + 16 + legendH + pad;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W * scale; canvas.height = H * scale;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(scale, scale);
+
+  const INK = "#2D3A33", LIGHT = "#8A9691", GREEN = "#1B4332";
+  function rr(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  const FONT = '-apple-system, "PingFang SC", "Microsoft YaHei", sans-serif';
+
+  // 白底
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, W, H);
+
+  // 标题
+  ctx.fillStyle = GREEN;
+  ctx.font = "bold 22px " + FONT;
+  ctx.textAlign = "center";
+  ctx.fillText((cls ? cls + " · " : "") + "座位表", W / 2, 34);
+  ctx.fillStyle = LIGHT;
+  ctx.font = "12px " + FONT;
+  ctx.fillText(Today.now() + " · 共 " + order.length + " 人", W / 2, 48);
+
+  // 讲台
+  const stW = Math.min(360, W * 0.5), stX = (W - stW) / 2, stY = titleH + 6;
+  ctx.fillStyle = "#F6EEDD";
+  ctx.strokeStyle = "#DCC99A";
+  ctx.lineWidth = 1.5;
+  rr(stX, stY, stW, stageH - 14, 8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "#8A6D3B";
+  ctx.font = "bold 14px " + FONT;
+  ctx.fillText("讲  台", W / 2, stY + 20);
+
+  // 座位格
+  const gridTop = stY + stageH - 14 + 14;
+  order.forEach((s, i) => {
+    const r = Math.floor(i / cols), c = i % cols;
+    const x = pad + c * (cellW + gap), y = gridTop + r * (cellH + gap);
+    const gc = s.group ? groupColorOf(s.group) : null;
+    ctx.fillStyle = gc ? gc.bg : "#F7F9F8";
+    ctx.strokeStyle = gc ? gc.border : "#D8E0DC";
+    ctx.lineWidth = 2;
+    rr(x, y, cellW, cellH, 8); ctx.fill(); ctx.stroke();
+    if (s.group) {
+      ctx.fillStyle = gc.border;
+      ctx.font = "bold 10px " + FONT;
+      ctx.textAlign = "left";
+      ctx.fillText(s.group, x + 8, y + 15);
+    }
+    ctx.fillStyle = s.gender === "男" ? "#3A6B9B" : s.gender === "女" ? "#C0668A" : INK;
+    ctx.font = "bold 15px " + FONT;
+    ctx.textAlign = "center";
+    ctx.fillText(s.name || "", x + cellW / 2, y + (s.group ? 36 : 32));
+    ctx.fillStyle = LIGHT;
+    ctx.font = "10px " + FONT;
+    const info = (s.gender || "") + (s.score != null ? " · " + s.score + "分" : "");
+    if (info) ctx.fillText(info, x + cellW / 2, y + (s.group ? 54 : 50));
+  });
+
+  // 图例（小组颜色）
+  const gList = seatGroupOrderList(order);
+  if (gList.length) {
+    let lx = pad, ly = H - legendH - pad + 18;
+    ctx.font = "bold 11px " + FONT;
+    ctx.fillStyle = INK;
+    ctx.textAlign = "left";
+    ctx.fillText("小组：", lx, ly + 4);
+    lx += 44;
+    gList.forEach(g => {
+      const c = groupColorOf(g);
+      ctx.fillStyle = c.bg;
+      ctx.strokeStyle = c.border;
+      ctx.lineWidth = 1.5;
+      rr(lx, ly - 8, 14, 14, 4); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = c.border;
+      ctx.font = "bold 11px " + FONT;
+      ctx.fillText(g, lx + 19, ly + 3);
+      lx += 19 + ctx.measureText(g).width + 14;
+      if (lx > W - 90) { lx = pad; ly += 22; }
+    });
+  }
+
+  // 下载
+  try {
+    const a = document.createElement("a");
+    a.href = canvas.toDataURL("image/png");
+    a.download = "座位表_" + Today.now() + ".png";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast("📷 座位图已导出（PNG 图片）");
+  } catch (e) {
+    toast("导出失败：" + (e.message || e));
+  }
 }
 /* 成绩自动排座：好中差四人一组（首尾蛇形） */
 function generateSeatsFromScores() {
@@ -603,12 +792,13 @@ function seatImportOpen() {
   openModal(`
     <div style="display:flex;flex-direction:column;gap:8px;text-align:left">
       <button class="btn btn-primary" data-act="seat-xl-pick" style="width:100%;min-height:46px">📊 选择 Excel 文件（.xlsx / .csv）</button>
-      <div id="seatXlPreview" style="font-size:12px;color:var(--ink-light);line-height:1.6">表格需含 <b>姓名</b> 列，可选 <b>性别、成绩、学习小组</b> 列。<br>表头示例：<b>姓名、性别、总分、小组</b></div>
+      <div id="seatXlPreview" style="font-size:12px;color:var(--ink-light);line-height:1.6">表格需含 <b>姓名</b> 列，可选 <b>性别、成绩、学习小组</b> 列。<br>表头示例：<b>姓名、性别、总分、小组</b><br>52 人按 9 组分配（7 组 × 6 人 + 2 组 × 5 人），同组同色。</div>
       <div style="font-size:12.5px;font-weight:600;color:var(--ink-soft);margin-top:4px">排座方式：</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-primary btn-sm" data-act="seat-strategy" data-k="grade">📊 按成绩（好中差四人一组）</button>
         <button class="btn btn-ghost btn-sm" data-act="seat-strategy" data-k="group">👥 按学习小组</button>
         <button class="btn btn-ghost btn-sm" data-act="seat-strategy" data-k="gender">👫 男女搭配</button>
+        <button class="btn btn-ghost btn-sm" data-act="seat-strategy" data-k="auto9">🧩 自动分9组（52人=7×6+2×5）</button>
       </div>
     </div>`, "导入 Excel 排座");
   document.querySelector("[data-act=seat-xl-pick]").onclick = () => seatPickExcel();
@@ -663,10 +853,16 @@ async function seatPickExcel() {
     const r = seatMapSheet(files[0].rows);
     if (!r) { preview.innerHTML = "⚠️ 未能识别：请确保第一行为表头，且含「姓名」列"; return; }
     seatXlPending = r;
+    const groupNames = [...new Set(r.items.map(it => it.group).filter(Boolean))];
+    const n = r.items.length;
+    const nineNote = n === 52 ? " · 正好 52 人（7组×6人 + 2组×5人）" : "";
+    const groupNote = r.hasGroup
+      ? ` · 识别到 <b>${groupNames.length}</b> 个小组（同组同色${groupNames.length === 9 ? "，正好 9 组" : ""}）`
+      : " · 未检测到小组列，可选「🧩 自动分9组」";
     const cols = ["姓名", "性别", "成绩", "学习小组"];
     const bodyRows = r.items.map(it => `<tr><td>${esc(it.name)}</td><td>${esc(it.gender || "")}</td><td>${it.score != null ? it.score : ""}</td><td>${esc(it.group || "")}</td></tr>`).join("");
     preview.innerHTML = `
-      <div style="color:var(--green-600);margin-bottom:6px">✅ 识别到 <b>${r.items.length}</b> 名学生${r.hasGroup ? " · 含学习小组" : ""}${r.hasGender ? " · 含性别" : ""}${r.hasScore ? " · 含成绩" : ""}</div>
+      <div style="color:var(--green-600);margin-bottom:6px">✅ 识别到 <b>${n}</b> 名学生${nineNote}${groupNote}${r.hasGender ? " · 含性别" : ""}${r.hasScore ? " · 含成绩" : ""}</div>
       <div class="tbl-wrap" style="max-height:220px;overflow:auto"><table class="tbl" style="font-size:12.5px">
         <tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr>${bodyRows}
       </table></div>`;
@@ -720,44 +916,94 @@ function seatArrangeByGender(items) {
   result.forEach((s, i) => { const p = i / result.length; s.grade = p < 0.25 ? "A" : p < 0.5 ? "B" : p < 0.75 ? "C" : "D"; });
   return result;
 }
+/* 自动均分 N 组：52 人 → 9 组（7组×6人 + 2组×5人），按成绩蛇形发牌保证各组实力均衡
+   通用规则：n 人分 g 组，前 n%g 组每人多 1 人 */
+function seatSplitGroups(items, gCount) {
+  const n = items.length;
+  const base = Math.floor(n / gCount), extra = n % gCount;
+  const sizes = Array.from({ length: gCount }, (_, i) => base + (i < extra ? 1 : 0));
+  const sorted = items.slice().sort((a, b) => {
+    const sa = a.score == null ? -1 : a.score, sb = b.score == null ? -1 : b.score;
+    if (sb !== sa) return sb - sa;
+    return String(a.name).localeCompare(String(b.name), "zh-Hans-CN");
+  });
+  // 蛇形发牌：第1名→1组，第2名→2组 … 第9名→9组，第10名→9组，第11名→8组 …
+  const seq = [];
+  for (let round = 0; seq.length < n; round++) {
+    const idx = Array.from({ length: gCount }, (_, i) => i);
+    if (round % 2 === 1) idx.reverse();
+    idx.forEach(g => { if (sizes[g] > 0) { seq.push(g); sizes[g]--; } });
+  }
+  const groups = Array.from({ length: gCount }, () => []);
+  seq.forEach((g, i) => {
+    sorted[i].group = "第" + (g + 1) + "组";
+    groups[g].push(sorted[i]);
+  });
+  return groups;
+}
 function seatApplyImport() {
   if (!seatXlPending) { toast("请先选择并识别 Excel 文件"); return; }
   const items = seatXlPending.items.map(s => ({ name: s.name, gender: s.gender, score: s.score, group: s.group, grade: "" }));
   let final;
-  if (seatStrategy === "group") final = seatArrangeByGroup(items);
-  else if (seatStrategy === "gender") final = seatArrangeByGender(items);
-  else final = seatArrangeByGrade(items);
+  if (seatStrategy === "auto9") {
+    // 自动分 9 组：蛇形均衡 + 组内按成绩排，同组座位相邻
+    const groups = seatSplitGroups(items, 9);
+    final = groups.flat();
+    Store.set("seatGroupList", groups.map((_, i) => "第" + (i + 1) + "组"));
+  } else {
+    if (seatStrategy === "group") final = seatArrangeByGroup(items);
+    else if (seatStrategy === "gender") final = seatArrangeByGender(items);
+    else final = seatArrangeByGrade(items);
+    // 保存组序（用于稳定配色），按数字感知排序：组2 < 组10
+    const gs = [...new Set(items.map(s => s.group).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, "zh-Hans-CN", { numeric: true }));
+    if (gs.length) Store.set("seatGroupList", gs); else Store.del("seatGroupList");
+  }
   Store.set("seats", final);
   Store.del("seatLayout");
   closeModal();
   const body = document.getElementById("classTabBody");
   if (body) { body.innerHTML = renderSeatsEdit(); bindSeatEvents(); }
-  const label = seatStrategy === "group" ? "学习小组" : seatStrategy === "gender" ? "男女搭配" : "成绩";
-  toast("✅ 已按" + label + "排座，可拖动微调");
+  const label = seatStrategy === "auto9" ? "自动9组" : seatStrategy === "group" ? "学习小组" : seatStrategy === "gender" ? "男女搭配" : "成绩";
+  toast("✅ 已按" + label + "排座，同组同色，可拖动微调");
 }
-/* 座位滚动：mode="all" 小组整体循环 / "in" 小组内部组员循环 */
+/* 座位滚动（小组永不打散）
+   mode = "both" 组间平移 + 组内轮换（推荐，一键滚动）
+        | "all"  仅组间平移：第1组整体移到第2组的位置，末组绕回首组位置
+        | "in"   仅组内轮换：每个小组内部成员循环换一个座位 */
 function seatRotate(mode) {
   const saved = Store.get("seatLayout", { order: Store.get("seats", []) });
   const order = saved.order || [];
   if (!order.length) { toast("暂无座位数据"); return; }
-  // 按小组分组（保持相邻顺序）
-  const groups = [];
-  let last = null;
-  order.forEach(s => {
-    const g = s.group || "未分组";
-    if (g !== last) { groups.push([]); last = g; }
-    groups[groups.length - 1].push(s);
-  });
-  if (mode === "all") {
-    if (groups.length > 1) groups.push(groups.shift()); // 小组整体循环：第一个小组移到末尾
-  } else {
-    groups.forEach(g => { if (g.length > 1) g.push(g.shift()); }); // 每组组员循环换座
+  // 按小组字段分组块（不依赖相邻性，拖散了也会自动聚拢）
+  const gList = seatGroupOrderList(order);
+  const map = {};
+  order.forEach(s => { const g = s.group || ""; (map[g] = map[g] || []).push(s); });
+  let blocks = gList.filter(g => map[g] && map[g].length).map(g => map[g]);
+  const noGroup = map[""] || [];
+  const hasGroups = blocks.length > 0;
+
+  if (mode === "in" && !hasGroups) { toast("暂无小组数据，请先导入含「小组」列的表格或用「自动分9组」"); return; }
+
+  if ((mode === "all" || mode === "both") && hasGroups && blocks.length > 1) {
+    blocks.push(blocks.shift()); // 组间平移：首组绕到末尾
+  } else if ((mode === "all" || mode === "both") && (!hasGroups || blocks.length <= 1)) {
+    order.push(order.shift());   // 无小组时：全班整体循环挪一位
+    saved.order = order;
+    Store.set("seatLayout", saved);
+    const body = document.getElementById("classTabBody");
+    if (body) { body.innerHTML = renderSeatsEdit(); bindSeatEvents(); }
+    toast("🔄 已全班循环滚动一位");
+    return;
   }
-  saved.order = groups.flat();
+  if (mode === "in" || mode === "both") {
+    blocks.forEach(g => { if (g.length > 1) g.push(g.shift()); }); // 组内轮换
+  }
+  saved.order = blocks.flat().concat(noGroup);
   Store.set("seatLayout", saved);
   const body = document.getElementById("classTabBody");
   if (body) { body.innerHTML = renderSeatsEdit(); bindSeatEvents(); }
-  toast(mode === "all" ? "🔄 已整体滚动（小组保持相邻）" : "🔁 已小组内滚动换座");
+  toast(mode === "both" ? "🔄 已滚动：小组平移 + 组内轮换（小组未打散）" : mode === "all" ? "🚚 已组间平移（组内成员不变）" : "🔁 已组内轮换换座");
 }
 
 /* ---- AI自动排座事件 + 逻辑 ---- */

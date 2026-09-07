@@ -870,23 +870,26 @@ function renderSeatsEdit() {
   // 用保存的布局或默认顺序
   const order = saved.order || seats;
   const rows = Math.ceil(order.length / cols);
+  const gList = seatGroupOrderList(order);
+  const gChips = gList.map(g => {
+    const c = groupColorOf(g) || { bg: "#F0F0F0", border: "#999" };
+    return `<span class="grp-chip" style="background:${c.bg};border:1.5px solid ${c.border};color:${c.border}">${esc(g)}</span>`;
+  }).join("");
   let html = `<div class="card">
-    <div class="card-title">🪑 座次表
-      <button class="btn btn-primary btn-sm" data-act="seat-import">📊 导入 Excel 排座</button>
+    <div class="card-title">🪑 座次表 <span class="sub">${order.length} 人 · ${gList.length} 个小组</span>
+      <button class="btn btn-primary btn-sm" data-act="seat-import">📊 导入 Excel</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-save">💾 保存布局</button>
-      <button class="btn btn-ghost btn-sm" data-act="seat-rotate-all">🔄 整体滚动</button>
-      <button class="btn btn-ghost btn-sm" data-act="seat-rotate-in">🔁 小组内滚动</button>
+      <button class="btn btn-primary btn-sm" data-act="seat-rotate">🔄 滚动换座</button>
+      <button class="btn btn-ghost btn-sm" data-act="seat-rotate-all">🚚 仅组间</button>
+      <button class="btn btn-ghost btn-sm" data-act="seat-rotate-in">🔁 仅组内</button>
+      <button class="btn btn-ghost btn-sm" data-act="seat-image">📷 导出图片</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-download">⬇️ 下载</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-print">🖨️ 打印</button>
       <button class="btn btn-ghost btn-sm" data-act="seat-reset">清空</button>
     </div>
-    <div style="font-size:11.5px;color:var(--ink-light);margin-bottom:10px">
+    <div style="font-size:11.5px;color:var(--ink-light);margin-bottom:10px;line-height:2">
       <span style="color:#3A6B9B">■ 男生</span> <span style="color:#C0668A;margin-left:8px">■ 女生</span>
-      <span class="badge badge-green" style="margin-left:12px">成绩优秀</span>
-      <span class="badge badge-blue" style="margin-left:4px">良好</span>
-      <span class="badge badge-amber" style="margin-left:4px">中等</span>
-      <span class="badge badge-red" style="margin-left:4px">待提升</span>
-      <span style="margin-left:12px">彩色边框 = 学习小组 · 拖动卡片可换座</span>
+      <span style="margin-left:12px">小组颜色：</span>${gChips || "<span>暂无（导入含「小组」列的表格自动着色）</span>"}
     </div>
     <div style="text-align:center;margin:0 auto 10px;max-width:420px">
       <div style="background:#F6EEDD;border:1px solid #DCC99A;border-radius:8px;padding:8px;font-size:13px;font-weight:700;color:#8A6D3B">📚 讲 台</div>
@@ -894,22 +897,38 @@ function renderSeatsEdit() {
     <div class="seat-grid" id="seatGrid" style="grid-template-columns:repeat(${cols},1fr)">
       ${order.map((s, i) => renderSeatCell(s, i)).join("")}
     </div>
-    <div style="font-size:12px;color:var(--ink-light);margin-top:10px">💡 「🔄 整体滚动」= 全班循环换到下一个位置（小组保持相邻）；「🔁 小组内滚动」= 每个小组内部组员循环换座。</div>
+    <div style="font-size:12px;color:var(--ink-light);margin-top:10px">💡 「🔄 滚动换座」= 小组整体平移到下一组位置 + 组内成员轮换（小组永不打散）；也可单独点「仅组间」或「仅组内」。手机上<b>长按学生卡片</b>即可拖动换座。</div>
   </div>`;
   return html;
 }
-/* 学习小组 → 颜色（稳定映射） */
+/* 学习小组 → 颜色（10 色调色板，按组序稳定分配：9 个小组 9 种颜色不重复） */
+const SEAT_PALETTE = [
+  { bg: "#EAF3FB", border: "#3E7CB1" }, { bg: "#FDF3E3", border: "#D98E23" },
+  { bg: "#E9F7EC", border: "#3E9B63" }, { bg: "#F3EAFB", border: "#8657C9" },
+  { bg: "#FDECEC", border: "#D2504E" }, { bg: "#FFF6DA", border: "#A8871B" },
+  { bg: "#E4F5F5", border: "#289494" }, { bg: "#FBEAF2", border: "#C64E8D" },
+  { bg: "#EEEAF6", border: "#6B5B95" }, { bg: "#EAF0F4", border: "#5C7A99" }
+];
+/* 当前座位数据里出现的小组，按稳定顺序排列（优先用导入时保存的组序） */
+function seatGroupOrderList(order) {
+  const arr = order || [];
+  const seen = new Set();
+  arr.forEach(s => { if (s && s.group) seen.add(s.group); });
+  const out = [];
+  (Store.get("seatGroupList", []) || []).forEach(g => {
+    if (seen.has(g)) { out.push(g); seen.delete(g); }
+  });
+  arr.forEach(s => { if (s && s.group && seen.has(s.group)) { out.push(s.group); seen.delete(s.group); } });
+  return out;
+}
 function groupColorOf(group) {
   if (!group) return null;
-  const palette = [
-    { bg: "#EAF3FB", border: "#4A90D9" }, { bg: "#FDF3E3", border: "#E8A23D" },
-    { bg: "#E9F7EC", border: "#4CAF7D" }, { bg: "#F3EAFB", border: "#9B5DE5" },
-    { bg: "#FDECEC", border: "#E05A5A" }, { bg: "#FFF9E3", border: "#C9A227" },
-    { bg: "#EAF7F7", border: "#2FA8A8" }, { bg: "#FBEAF2", border: "#D95A9B" }
-  ];
+  const order = (Store.get("seatLayout", { order: [] }).order) || Store.get("seats", []);
+  const idx = seatGroupOrderList(order).indexOf(group);
+  if (idx >= 0) return SEAT_PALETTE[idx % SEAT_PALETTE.length];
   let h = 0;
   for (let i = 0; i < group.length; i++) h = (h * 31 + group.charCodeAt(i)) % 9973;
-  return palette[h % palette.length];
+  return SEAT_PALETTE[h % SEAT_PALETTE.length];
 }
 function renderSeatCell(s, idx) {
   const gradeClass = s.grade ? `grade-${s.grade}` : "";
